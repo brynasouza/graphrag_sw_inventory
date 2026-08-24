@@ -1,25 +1,30 @@
 /**
- * Aplica o tema (theme.ts) ao app.
+ * Aplica um TEMA (efetivo) ao app.
  *
  * Converte cada cor em uma variável CSS no elemento <html>, para que o
  * CSS (index.css) possa usar var(--color-primary), etc. Também ajusta o
- * título da aba com o nome da marca. Chamado uma vez em main.tsx.
+ * título da aba com o nome da marca.
+ *
+ * Recebe o tema por PARÂMETRO (não lê o theme.ts direto) porque o tema pode
+ * ter sido sobrescrito em tempo de execução pelo painel — veja ThemeContext.
  */
-import { theme } from "./theme";
+import { Theme } from "./theme";
 
 // camelCase -> kebab-case (primaryHover -> primary-hover)
 function toKebab(s: string): string {
   return s.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
 }
 
-export function applyTheme(): void {
+export function aplicarVars(tema: Theme): void {
   const root = document.documentElement;
 
-  Object.entries(theme.colors).forEach(([nome, valor]) => {
+  Object.entries(tema.colors).forEach(([nome, valor]) => {
     root.style.setProperty(`--color-${toKebab(nome)}`, valor);
   });
-  root.style.setProperty("--radius", theme.radius);
-  root.style.setProperty("--logo-height", theme.brand.logoHeight);
+  root.style.setProperty("--radius", tema.radius);
+  root.style.setProperty("--logo-height", tema.brand.logoHeight);
+  root.style.setProperty("--sidebar-width", tema.layout.sidebarWidth);
+  root.style.setProperty("--brand-font-size", tema.layout.brandFontSize);
 
-  document.title = theme.brand.name;
+  document.title = tema.brand.name;
 }
