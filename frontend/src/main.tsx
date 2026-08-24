@@ -2,14 +2,15 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "./App";
-import { applyTheme } from "./theme/applyTheme";
+import { ThemeProvider } from "./theme/ThemeContext";
 import "./index.css";
 
-// Aplica o tema (cores + título) antes de desenhar a tela.
-applyTheme();
-
+// O ThemeProvider aplica o tema (cores + título) e mantém os ajustes do
+// painel de personalização. Envolve todo o app.
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
   </React.StrictMode>
 );

@@ -24,7 +24,7 @@ body {
 }
 
 .sidebar {
-  width: 240px;
+  width: var(--sidebar-width);
   flex-shrink: 0;
   background: var(--color-surface);
   border-right: 1px solid var(--color-border);
@@ -32,6 +32,8 @@ body {
   position: sticky;
   top: 0;
   height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .brand {
@@ -46,7 +48,7 @@ body {
 }
 .brand-name {
   font-weight: 700;
-  font-size: 1.05rem;
+  font-size: var(--brand-font-size);
 }
 
 .nav {
@@ -356,6 +358,156 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Painel de personalização (botão + drawer). Sem cores fixas: tudo via tema.
+ * ------------------------------------------------------------------------- */
+/* Botão discreto no rodapé da sidebar. */
+.tema-botao {
+  margin-top: auto; /* empurra para o rodapé da sidebar (flex column) */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.tema-botao:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* Fundo semitransparente atrás do drawer. */
+.tema-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 40;
+}
+.tema-overlay.aberto {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Drawer lateral (desliza da direita). */
+.tema-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: 340px;
+  max-width: 90vw;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -8px 0 24px rgba(15, 23, 42, 0.12);
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+}
+.tema-drawer.aberto {
+  transform: translateX(0);
+}
+
+.tema-cabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+.tema-fechar {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+}
+.tema-fechar:hover {
+  color: var(--color-text);
+}
+
+.tema-corpo {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tema-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+.tema-campo input[type="text"],
+.tema-campo select {
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.9rem;
+  outline: none;
+}
+.tema-campo input[type="text"]:focus,
+.tema-campo select:focus {
+  border-color: var(--color-primary);
+}
+.tema-campo input[type="color"] {
+  width: 100%;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.tema-cores {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.tema-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tema-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.tema-restaurar {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.tema-restaurar:hover {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
 }
 
 /* Telas estreitas: empilha as grades e recolhe a barra lateral. */

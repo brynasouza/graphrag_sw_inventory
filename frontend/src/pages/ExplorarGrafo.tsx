@@ -7,11 +7,12 @@ import { useEffect, useMemo, useState } from "react";
 
 import { GraphData, GraphNode, explorarGrafo } from "../api";
 import { GraphView, estiloDoTipo } from "../components/GraphView";
-import { theme } from "../theme/theme";
+import { Theme } from "../theme/theme";
+import { useTheme } from "../theme/ThemeContext";
 
-/** Legenda: cor -> tipo de entidade (lida do theme.ts). */
-function Legenda() {
-  const itens = Object.entries(theme.graph) as [string, { label: string; color: string }][];
+/** Legenda: cor -> tipo de entidade (lida do tema efetivo). */
+function Legenda({ tema }: { tema: Theme }) {
+  const itens = Object.entries(tema.graph) as [string, { label: string; color: string }][];
   return (
     <div className="legend">
       <p className="panel-title">Legenda</p>
@@ -26,7 +27,7 @@ function Legenda() {
 }
 
 /** Painel de detalhes do nó selecionado. */
-function Detalhes({ node }: { node: GraphNode | null }) {
+function Detalhes({ tema, node }: { tema: Theme; node: GraphNode | null }) {
   if (!node) {
     return (
       <div className="panel-hint">
@@ -37,7 +38,7 @@ function Detalhes({ node }: { node: GraphNode | null }) {
   const props = Object.entries(node.props ?? {}).filter(([, v]) => v !== null && v !== undefined);
   return (
     <div className="node-details">
-      <p className="panel-title">{estiloDoTipo(node.tipo).label}</p>
+      <p className="panel-title">{estiloDoTipo(tema, node.tipo).label}</p>
       <p className="node-name">{node.label}</p>
       {props.length > 0 && (
         <dl className="props">
@@ -54,6 +55,7 @@ function Detalhes({ node }: { node: GraphNode | null }) {
 }
 
 export function ExplorarGrafo() {
+  const tema = useTheme();
   const [data, setData] = useState<GraphData | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [selecionado, setSelecionado] = useState<GraphNode | null>(null);
@@ -91,9 +93,9 @@ export function ExplorarGrafo() {
             <GraphView data={data} altura={620} onSelecionar={setSelecionado} />
           </div>
           <aside className="card grafo-panel">
-            <Legenda />
+            <Legenda tema={tema} />
             <hr className="panel-sep" />
-            <Detalhes node={selecionado} />
+            <Detalhes tema={tema} node={selecionado} />
           </aside>
         </div>
       )}
