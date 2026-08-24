@@ -1,0 +1,42 @@
+# ─── Segredos (NUNCA versionar) ───────────────────────────────
+.env
+*.env
+.env.*
+!.env.example
+!frontend/.env.example
+
+# Chaves, certificados e credenciais
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.keystore
+credentials*
+*credentials.json
+secrets*
+*.secret
+service-account*.json
+
+# ─── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# ─── Node / React ─────────────────────────────────────────────
+node_modules/
+dist/
+build/
+.vite/
+
+# ─── Sistema operacional / IDE ────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.log

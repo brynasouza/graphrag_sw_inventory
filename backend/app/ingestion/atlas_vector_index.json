@@ -1,0 +1,15 @@
+{
+  "_comment": "Definicao do indice de Atlas Vector Search. No Atlas: Database > colecao 'search_index' > Search Indexes > Create > Atlas Vector Search (JSON Editor). Nome do indice: vector_index. numDimensions (1024) tem que ser igual ao DIM em app/retrieval/embeddings.py.",
+  "fields": [
+    {
+      "type": "vector",
+      "path": "embedding",
+      "numDimensions": 1024,
+      "similarity": "cosine"
+    },
+    {
+      "type": "filter",
+      "path": "entity_type"
+    }
+  ]
+}
