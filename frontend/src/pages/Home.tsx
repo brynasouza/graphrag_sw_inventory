@@ -1,6 +1,7 @@
 /**
- * Tela principal: orquestra o estado (pergunta -> carregando -> resposta
- * ou erro) e monta os componentes.
+ * Página "Perguntar": pergunta -> resposta. Além do texto do Claude e dos
+ * fatos, mostra um MINI-GRAFO com só as entidades que foram usadas para
+ * chegar naquela resposta (context.subgrafo).
  */
 import { useState } from "react";
 
@@ -8,7 +9,7 @@ import { AskResponse, ask } from "../api";
 import { Answer } from "../components/Answer";
 import { AskForm } from "../components/AskForm";
 import { Facts } from "../components/Facts";
-import { Header } from "../components/Header";
+import { GraphView } from "../components/GraphView";
 
 export function Home() {
   const [loading, setLoading] = useState(false);
@@ -29,9 +30,15 @@ export function Home() {
     }
   }
 
+  const subgrafo = resposta?.context.subgrafo;
+
   return (
     <div className="container">
-      <Header />
+      <h1 className="page-title">Perguntar</h1>
+      <p className="subtitle">
+        Pergunte em linguagem natural sobre licenças, fornecedores e custos.
+      </p>
+
       <AskForm onAsk={handleAsk} loading={loading} />
 
       {erro && (
@@ -44,6 +51,16 @@ export function Home() {
       {resposta && (
         <>
           <Answer texto={resposta.answer} />
+
+          {subgrafo && subgrafo.nodes.length > 0 && (
+            <div className="card">
+              <p className="mini-graph-title">
+                Entidades usadas nesta resposta
+              </p>
+              <GraphView data={subgrafo} altura={280} interativo={false} />
+            </div>
+          )}
+
           <Facts context={resposta.context} />
         </>
       )}

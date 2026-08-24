@@ -7,8 +7,10 @@ referências entre coleções e devolvem os fatos exatos.
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pymongo.errors import PyMongoError
 
-from app.graph import costs, queries
+from app.core.db import get_db
+from app.graph import costs, explore, queries, subgraph
 
 router = APIRouter(prefix="/graph", tags=["grafo"])
 
@@ -50,3 +52,46 @@ def get_cost_by_cost_center(vendor: Optional[str] = Query(None)):
 def get_cost_by_vendor():
     """Gasto total por fornecedor."""
     return costs.cost_by_vendor()
+
+
+# ---------------------------------------------------------------------------
+# Visualização de grafo (nós + arestas) para o frontend
+# ---------------------------------------------------------------------------
+@router.get("/explore")
+def get_full_graph():
+    """
+    Grafo inteiro do inventário como {nodes, edges}, para a página
+    'Explorar Grafo'. Nós coloridos por tipo; allocations viram arestas
+    licença → projeto (com a quantidade no rótulo).
+    """
+    try:
+        return explore.full_graph(get_db())
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Banco indisponível ao montar o grafo. Detalhe: " + str(exc),
+        )
+
+
+@router.get("/licenses/{license_id}/subgraph")
+def get_license_subgraph(license_id: str):
+    """Subgrafo (mini-grafo) a partir de uma licença."""
+    try:
+        return subgraph.subgraph_for_license(get_db(), license_id)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Banco indisponível ao montar o subgrafo. Detalhe: " + str(exc),
+        )
+
+
+@router.get("/vendors/{vendor_id}/subgraph")
+def get_vendor_subgraph(vendor_id: str):
+    """Subgrafo (mini-grafo) a partir de um fornecedor."""
+    try:
+        return subgraph.subgraph_for_vendor(get_db(), vendor_id)
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Banco indisponível ao montar o subgrafo. Detalhe: " + str(exc),
+        )
