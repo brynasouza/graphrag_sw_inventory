@@ -19,6 +19,7 @@ export function applyTheme(): void {
     root.style.setProperty(`--color-${toKebab(nome)}`, valor);
   });
   root.style.setProperty("--radius", theme.radius);
+  root.style.setProperty("--logo-height", theme.brand.logoHeight);
 
   document.title = theme.brand.name;
 }

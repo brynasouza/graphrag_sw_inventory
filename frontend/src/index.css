@@ -29,8 +29,9 @@ body {
   margin-bottom: 8px;
 }
 .header img {
-  width: 40px;
-  height: 40px;
+  height: var(--logo-height); /* controlada pelo theme.ts (logoHeight) */
+  width: auto;                /* mantém a proporção; "auto" respeita o original */
+  max-width: 100%;            /* nunca estoura a largura da tela */
 }
 .header h1 {
   font-size: 1.4rem;

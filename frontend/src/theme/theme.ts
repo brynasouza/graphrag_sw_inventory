@@ -14,10 +14,11 @@
  */
 export const theme = {
   brand: {
-    name: "MVP GraphRAG",
+    name: "Inventário de Software",
     // Logo padrão embutido (um "nó de grafo" simples). Troque à vontade.
     logo:
-      "data:image/svg+xml;utf8," +
+      // "data:image/svg+xml;utf8," +
+      "https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Logo_VIVO.svg/1280px-Logo_VIVO.svg.png?utm_source=pt.wikipedia.org&utm_campaign=index&utm_content=thumbnail" +
       encodeURIComponent(
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
            <circle cx="24" cy="12" r="6" fill="#4f46e5"/>
@@ -26,6 +27,12 @@ export const theme = {
            <path d="M24 18 L12 30 M24 18 L36 30" stroke="#94a3b8" stroke-width="2"/>
          </svg>`
       ),
+    // Altura do logo no cabeçalho:
+    //   - um valor fixo ("40px", "2.5rem", "64px") CONTROLA o tamanho;
+    //   - "auto" RESPEITA o tamanho ORIGINAL da imagem.
+    // Em qualquer caso a largura se ajusta sozinha (mantém a proporção,
+    // sem distorcer). Um logo maior que a tela é limitado à largura dela.
+    logoHeight: "auto",
   },
 
   // Paleta de cores. Cada chave vira uma variável CSS: --color-primary etc.
