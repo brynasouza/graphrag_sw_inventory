@@ -21,7 +21,7 @@ texto. Por isso reunimos aqui apenas dados verificáveis do banco.
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_db
-from app.graph import costs, queries
+from app.graph import costs, graphdata, queries, subgraph
 from app.models.schemas import Collections as C
 from app.retrieval import vector_search
 
@@ -57,6 +57,7 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
     fatos: List[Dict[str, Any]] = []
     fornecedores: set = set()   # fornecedores p/ o consolidado de gasto
     vistos: set = set()         # evita repetir a mesma entidade
+    subgrafos: List[Dict[str, Any]] = []  # mini-grafo de cada entidade usada
 
     for h in hits:
         chave = (h["entity_type"], h["entity_id"])
@@ -71,17 +72,22 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
             fatos.append({
                 "tipo": "licenca",
                 "nome": h["name"],
+                "entity_id": h["entity_id"],
                 "fornecedor": fornecedor,
                 "custo_unitario": custo,
                 "moeda": moeda,
                 # impacto já traz validade, projetos, times, centros e servidores
                 "impacto": queries.license_impact(h["entity_id"]),
             })
+            subgrafos.append(subgraph.subgraph_for_license(db, h["entity_id"]))
         elif h["entity_type"] == "vendor":
             fornecedores.add(h["name"])
-            fatos.append({"tipo": "fornecedor", "nome": h["name"]})
+            fatos.append({"tipo": "fornecedor", "nome": h["name"],
+                          "entity_id": h["entity_id"]})
+            subgrafos.append(subgraph.subgraph_for_vendor(db, h["entity_id"]))
         else:
-            fatos.append({"tipo": h["entity_type"], "nome": h["name"]})
+            fatos.append({"tipo": h["entity_type"], "nome": h["name"],
+                          "entity_id": h["entity_id"]})
 
     # Consolidado de gasto por centro de custo, para cada fornecedor envolvido.
     gastos_por_fornecedor = [
@@ -100,4 +106,6 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
         ],
         "fatos": fatos,
         "gastos_por_fornecedor": gastos_por_fornecedor,
+        # Mini-grafo consolidado: só as entidades usadas para responder.
+        "subgrafo": graphdata.merge(subgrafos),
     }

@@ -44,3 +44,16 @@ def test_pergunta_gasto_por_centro(client):
         client, "Quanto gastamos com a VMware por centro de custo?"
     )
     assert "CC-TI" in data["answer"]
+
+
+def test_resposta_traz_subgrafo(client):
+    """A resposta inclui o mini-grafo (context.subgrafo) das entidades usadas."""
+    data = _ask_or_skip(
+        client, "Quais projetos usam a licença da VMware e quando ela expira?"
+    )
+    subgrafo = data["context"]["subgrafo"]
+    assert subgrafo["nodes"], "esperava um subgrafo com nós"
+
+    ids = {n["id"] for n in subgrafo["nodes"]}
+    for e in subgrafo["edges"]:
+        assert e["source"] in ids and e["target"] in ids
