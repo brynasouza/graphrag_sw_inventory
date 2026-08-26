@@ -16,6 +16,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 
 from app.core.db import get_db
+from app.graph import mongosh
 from app.models.schemas import Collections as C
 
 
@@ -43,21 +44,31 @@ def _clean(doc: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _filtro_licencas(expiring_in_days: Optional[int] = None) -> Dict[str, Any]:
+    """Filtro do find() de licenças (vazio, ou 'vence em N dias')."""
+    from datetime import datetime, timedelta
+
+    if expiring_in_days is None:
+        return {}
+    limite = datetime.utcnow() + timedelta(days=expiring_in_days)
+    return {"expires_at": {"$lte": limite}}
+
+
 def list_licenses(expiring_in_days: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Lista licenças. Se expiring_in_days for informado, filtra as que
     vencem nesse número de dias a partir de agora.
     """
-    from datetime import datetime, timedelta
-
     db = get_db()
-    filtro: Dict[str, Any] = {}
-    if expiring_in_days is not None:
-        limite = datetime.utcnow() + timedelta(days=expiring_in_days)
-        filtro = {"expires_at": {"$lte": limite}}
-
-    docs = db[C.LICENSES].find(filtro).sort("expires_at", 1)
+    docs = db[C.LICENSES].find(_filtro_licencas(expiring_in_days)).sort("expires_at", 1)
     return [_clean(d) for d in docs]
+
+
+def consulta_licencas(expiring_in_days: Optional[int] = None) -> str:
+    """String mongosh do find() de licenças (o mesmo comando que roda)."""
+    return mongosh.formatar_find(
+        C.LICENSES, _filtro_licencas(expiring_in_days), {"expires_at": 1}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +112,25 @@ def _traversal_stages() -> List[Dict[str, Any]]:
     ]
 
 
+def _pipeline_travessia(oid: ObjectId) -> List[Dict[str, Any]]:
+    """
+    Pipeline completo da travessia a partir de uma licença.
+    Fica separado da execução para que o comando exibido em "Ver a consulta"
+    seja EXATAMENTE o que roda no banco (inclusive o ObjectId real do $match).
+    """
+    return [{"$match": {"_id": oid}}] + _traversal_stages() + [
+        {"$project": {
+            "_id": 0,
+            "project_id": {"$toString": "$alloc.project_id"},
+            "project": "$project.name",
+            "quantity": "$alloc.quantity",
+            "team": "$team.name",
+            "cost_center": "$cost_center.code",
+        }},
+        {"$sort": {"project": 1}},
+    ]
+
+
 def projects_using_license(license_id: str) -> List[Dict[str, Any]]:
     """
     "Quais projetos usam a licença X?"
@@ -110,18 +140,15 @@ def projects_using_license(license_id: str) -> List[Dict[str, Any]]:
     if oid is None:
         return []
 
-    db = get_db()
-    pipeline = [{"$match": {"_id": oid}}] + _traversal_stages() + [
-        {"$project": {
-            "_id": 0,
-            "project": "$project.name",
-            "quantity": "$alloc.quantity",
-            "team": "$team.name",
-            "cost_center": "$cost_center.code",
-        }},
-        {"$sort": {"project": 1}},
-    ]
-    return list(db[C.LICENSES].aggregate(pipeline))
+    return list(get_db()[C.LICENSES].aggregate(_pipeline_travessia(oid)))
+
+
+def consulta_travessia(license_id: str) -> Optional[str]:
+    """String mongosh da travessia $lookup encadeada (o mesmo pipeline que roda)."""
+    oid = to_object_id(license_id)
+    if oid is None:
+        return None
+    return mongosh.formatar_aggregate(C.LICENSES, _pipeline_travessia(oid))
 
 
 def license_impact(license_id: str) -> Optional[Dict[str, Any]]:
@@ -141,12 +168,16 @@ def license_impact(license_id: str) -> Optional[Dict[str, Any]]:
 
     linhas = projects_using_license(license_id)
 
-    # Servidores dos projetos afetados (relevante p/ VMware, licenciado por host)
+    # Servidores dos projetos afetados (relevante p/ VMware, licenciado por host).
+    # A travessia já trouxe o project_id de cada alocação — usamos ele direto
+    # (join por _id), sem uma consulta extra buscando os projetos pelo nome.
     nomes_projetos = {l["project"] for l in linhas}
-    projetos_ids = [p["_id"] for p in db[C.PROJECTS].find(
-        {"name": {"$in": list(nomes_projetos)}}, {"_id": 1})]
+    projetos_ids = {
+        pid for pid in (to_object_id(l["project_id"]) for l in linhas)
+        if pid is not None
+    }
     servidores = [_clean(s) for s in db[C.SERVERS].find(
-        {"project_id": {"$in": projetos_ids}})]
+        {"project_id": {"$in": list(projetos_ids)}})]
 
     return {
         "license": lic["name"],

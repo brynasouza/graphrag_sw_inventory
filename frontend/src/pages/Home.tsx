@@ -10,6 +10,7 @@ import { Answer } from "../components/Answer";
 import { AskForm } from "../components/AskForm";
 import { Facts } from "../components/Facts";
 import { GraphView } from "../components/GraphView";
+import { VerConsulta } from "../components/VerConsulta";
 
 export function Home() {
   const [loading, setLoading] = useState(false);
@@ -60,6 +61,8 @@ export function Home() {
               <GraphView data={subgrafo} altura={280} interativo={false} />
             </div>
           )}
+
+          <VerConsulta consultas={resposta.context.consultas} />
 
           <Facts context={resposta.context} />
         </>

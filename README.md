@@ -122,9 +122,15 @@ python -m venv .venv
 source .venv/bin/activate           # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Carrega os dados de exemplo (idempotente)
+# Carrega os dados de exemplo (determinístico e idempotente)
 python -m app.ingestion.seed
 ```
+
+> O seed é **determinístico**: os `_id` de cada documento são derivados de
+> uma chave natural (nome/código), então rodá-lo de novo produz exatamente os
+> mesmos identificadores. As datas de expiração são **relativas** à data de
+> hoje (para "vencer em 90 dias" seguir verdadeiro) — fixe-as com a variável
+> `SEED_DATA_BASE=2026-01-01` se precisar de datas estáveis (ex.: em teste).
 
 ### 3. Índice de busca vetorial (uma vez)
 
@@ -135,6 +141,19 @@ python -m app.ingestion.build_embeddings
 Depois, no site do Atlas, crie um índice **Atlas Vector Search** chamado
 `vector_index` na coleção `search_index`, usando a definição em
 [`backend/app/ingestion/atlas_vector_index.json`](backend/app/ingestion/atlas_vector_index.json).
+
+> **Seed × search_index.** O `seed.py` **não** apaga a coleção `search_index`
+> — quem a (re)constrói é o `build_embeddings.py`. Como os `_id` do seed são
+> estáveis, re-seedar mantém os `entity_id` válidos: só é preciso rodar o
+> `build_embeddings` de novo quando as **entidades ou seus textos mudarem**,
+> não a cada seed.
+
+> **Âncora semântica.** O texto vetorizado inclui uma descrição funcional em
+> alguns produtos (OpenShift → contêineres/Kubernetes; Confluence/Jira →
+> colaboração e documentação) para que perguntas por _conceito_ ("o que temos
+> de plataforma de contêineres?") encontrem a entidade certa. Esse conceito
+> vive só no texto indexado, **não** nos campos de negócio — um `find()` por
+> palavra-chave não acharia. É o que a busca vetorial demonstra.
 
 ### 4. Subir a API
 
@@ -163,6 +182,12 @@ npm run dev
 | GET | `/graph/costs/by-vendor` | Gasto por fornecedor |
 | GET | `/search?q=...` | Busca vetorial (texto → entidade) |
 | POST | `/ask` | **GraphRAG completo** (pergunta → resposta) |
+
+> Os GETs de grafo/custo aceitam `?incluir_consulta=true`: a resposta passa a
+> ser `{ dados, consulta }`, onde `consulta` é o comando MongoDB real por trás
+> do resultado (pronto para colar no `mongosh`). É o que alimenta o painel
+> "Ver a consulta" no frontend. O `/ask` já traz esses comandos em
+> `context.consultas`. Sem o parâmetro, a resposta é idêntica à de sempre.
 
 Exemplo:
 ```bash

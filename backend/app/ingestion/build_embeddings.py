@@ -25,6 +25,22 @@ from app.models.schemas import Collections as C
 from app.retrieval import embeddings
 
 
+# Âncora semântica CIRÚRGICA: descrição funcional só dos produtos cujo termo de
+# negócio o usuário usaria mas que NÃO aparece em nenhum campo do banco. Sem
+# isso, "plataforma de contêineres" e "colaboração/documentação" resolviam por
+# margem frágil (medido: OpenShift/Red Hat contaminava com VMware no k=3;
+# Confluence/Jira ficavam a ~0,004 de um banco de dados irrelevante).
+# vSphere/vCenter (virtualização) NÃO entram: já resolvem com folga sozinhos —
+# enriquecer o que já funciona só adiciona ruído. O conceito passa a existir no
+# TEXTO indexado (fonte do embedding), nunca nos campos de negócio: um find()
+# por palavra-chave continua não achando — é essa a diferença que a busca prova.
+_DESCRICAO_FUNCIONAL = {
+    "OpenShift": "plataforma de contêineres e orquestração Kubernetes",
+    "Confluence": "colaboração, wiki e documentação de equipes",
+    "Jira": "colaboração, gestão de projetos e acompanhamento de tarefas",
+}
+
+
 def _license_docs(db) -> List[Dict[str, Any]]:
     """Uma frase por licença, enriquecida com produto e fornecedor."""
     produtos = {p["_id"]: p for p in db[C.PRODUCTS].find()}
@@ -40,6 +56,10 @@ def _license_docs(db) -> List[Dict[str, Any]]:
             f"Licenciada por {lic.get('metric', '?')}. "
             f"Vence em {lic['expires_at'].strftime('%d/%m/%Y')}."
         )
+        # Âncora funcional só para os produtos frágeis (ver _DESCRICAO_FUNCIONAL).
+        desc = _DESCRICAO_FUNCIONAL.get(prod.get("name"))
+        if desc:
+            texto += f" Usado para {desc}."
         docs.append({
             "entity_type": "license",
             "entity_id": lic["_id"],
@@ -57,8 +77,13 @@ def _vendor_docs(db) -> List[Dict[str, Any]]:
 
     docs = []
     for v in db[C.VENDORS].find():
-        prods = ", ".join(produtos_por_fornecedor.get(v["_id"], [])) or "sem produtos"
+        nomes = produtos_por_fornecedor.get(v["_id"], [])
+        prods = ", ".join(nomes) or "sem produtos"
         texto = f"Fornecedor {v['name']}. Produtos: {prods}."
+        # Herda a âncora funcional dos produtos que a têm (só Red Hat e Atlassian).
+        categorias = [_DESCRICAO_FUNCIONAL[n] for n in nomes if n in _DESCRICAO_FUNCIONAL]
+        if categorias:
+            texto += f" Atua em: {'; '.join(categorias)}."
         docs.append({
             "entity_type": "vendor",
             "entity_id": v["_id"],

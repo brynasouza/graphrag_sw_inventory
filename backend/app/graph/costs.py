@@ -10,6 +10,7 @@ quantidade — sem quantidade não há gasto para somar.
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_db
+from app.graph import mongosh
 from app.models.schemas import Collections as C
 
 # Estágios comuns: allocations -> licença (traz unit_cost) e o "gasto" de cada linha
@@ -28,13 +29,13 @@ _LICENSE_JOIN = [
 ]
 
 
-def cost_by_cost_center(vendor: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Gasto total por centro de custo.
-    Se `vendor` for informado, considera só as licenças daquele fornecedor
-    (responde: 'quanto gastamos com o fornecedor Y por centro de custo?').
-    """
-    db = get_db()
+# ---------------------------------------------------------------------------
+# Montagem dos pipelines (separada da execução)
+# Manter a construção do pipeline numa função só garante que o comando exibido
+# na tela ("Ver a consulta") é EXATAMENTE o que roda no banco.
+# ---------------------------------------------------------------------------
+def _pipeline_por_centro(vendor: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Pipeline do gasto por centro de custo (opcionalmente filtrado por fornecedor)."""
     pipeline: List[Dict[str, Any]] = list(_LICENSE_JOIN)
 
     # Se filtrar por fornecedor, precisamos subir licença -> produto -> fornecedor
@@ -74,13 +75,12 @@ def cost_by_cost_center(vendor: Optional[str] = None) -> List[Dict[str, Any]]:
         }},
         {"$sort": {"total": -1}},
     ]
-    return list(db[C.ALLOCATIONS].aggregate(pipeline))
+    return pipeline
 
 
-def cost_by_vendor() -> List[Dict[str, Any]]:
-    """Gasto total por fornecedor (allocations -> licença -> produto -> fornecedor)."""
-    db = get_db()
-    pipeline = list(_LICENSE_JOIN) + [
+def _pipeline_por_fornecedor() -> List[Dict[str, Any]]:
+    """Pipeline do gasto por fornecedor (allocations -> licença -> produto -> fornecedor)."""
+    return list(_LICENSE_JOIN) + [
         {"$lookup": {"from": C.PRODUCTS, "localField": "lic.product_id",
                      "foreignField": "_id", "as": "product"}},
         {"$unwind": "$product"},
@@ -95,4 +95,30 @@ def cost_by_vendor() -> List[Dict[str, Any]]:
         {"$project": {"_id": 0, "vendor": "$_id", "total": 1, "currency": 1}},
         {"$sort": {"total": -1}},
     ]
-    return list(db[C.ALLOCATIONS].aggregate(pipeline))
+
+
+def cost_by_cost_center(vendor: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Gasto total por centro de custo.
+    Se `vendor` for informado, considera só as licenças daquele fornecedor
+    (responde: 'quanto gastamos com o fornecedor Y por centro de custo?').
+    """
+    return list(get_db()[C.ALLOCATIONS].aggregate(_pipeline_por_centro(vendor)))
+
+
+def cost_by_vendor() -> List[Dict[str, Any]]:
+    """Gasto total por fornecedor (allocations -> licença -> produto -> fornecedor)."""
+    return list(get_db()[C.ALLOCATIONS].aggregate(_pipeline_por_fornecedor()))
+
+
+# ---------------------------------------------------------------------------
+# Versões "só o comando" (para o painel "Ver a consulta")
+# ---------------------------------------------------------------------------
+def consulta_por_centro(vendor: Optional[str] = None) -> str:
+    """String mongosh do gasto por centro de custo (o mesmo pipeline que roda)."""
+    return mongosh.formatar_aggregate(C.ALLOCATIONS, _pipeline_por_centro(vendor))
+
+
+def consulta_por_fornecedor() -> str:
+    """String mongosh do gasto por fornecedor (o mesmo pipeline que roda)."""
+    return mongosh.formatar_aggregate(C.ALLOCATIONS, _pipeline_por_fornecedor())

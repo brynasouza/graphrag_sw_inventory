@@ -9,7 +9,24 @@ quantidade no rótulo), não um nó.
 from typing import Any, Dict, List
 
 from app.graph import graphdata as G
+from app.graph import mongosh
 from app.models.schemas import Collections as C
+
+# Ordem em que as coleções são lidas em full_graph(). A consulta exibida em
+# "Ver a consulta" tem que espelhar exatamente estes find().
+_COLECOES_DO_GRAFO = [
+    C.VENDORS, C.PRODUCTS, C.CONTRACTS, C.LICENSES, C.ALLOCATIONS,
+    C.PROJECTS, C.TEAMS, C.COST_CENTERS, C.SERVERS,
+]
+
+
+def consulta_do_grafo() -> str:
+    """
+    String mongosh com os find() que montam o grafo.
+    A tela "Explorar Grafo" NÃO usa $lookup: lê as 9 coleções e monta os
+    nós/arestas em Python. Então o comando honesto a mostrar são estes find().
+    """
+    return mongosh.formatar_finds(_COLECOES_DO_GRAFO)
 
 
 def full_graph(db) -> Dict[str, List[Dict[str, Any]]]:

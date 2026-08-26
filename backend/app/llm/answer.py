@@ -47,13 +47,22 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
+# Chaves do contexto que servem só para a interface e NÃO vão ao modelo.
+# ("consultas" = comandos MongoDB do painel "Ver a consulta"; "tempos" =
+# instrumentação de latência do /ask. Ambos são ruído para o LLM, que deve
+# receber apenas fatos.)
+_CHAVES_SO_INTERFACE = {"consultas", "tempos"}
+
+
 def generate_answer(query: str, context: Dict[str, Any]) -> str:
     """
     Gera a resposta em linguagem natural para `query` usando `context`
     (os fatos do grafo). Devolve apenas o texto da resposta.
     """
+    # Manda ao modelo só os fatos — tira o que é exclusivo da interface.
+    fatos = {k: v for k, v in context.items() if k not in _CHAVES_SO_INTERFACE}
     # `default=str` garante que datas/ObjectId virem texto no JSON.
-    fatos_json = json.dumps(context, ensure_ascii=False, default=str, indent=2)
+    fatos_json = json.dumps(fatos, ensure_ascii=False, default=str, indent=2)
     prompt = (
         f"Pergunta do usuário:\n{query}\n\n"
         f"Fatos disponíveis (JSON, vindos do grafo de inventário):\n{fatos_json}\n\n"
