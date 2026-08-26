@@ -93,7 +93,7 @@ export interface Theme {
 }
 
 // Ids das paletas prontas (usados pelo painel de personalização).
-export type PresetId = "indigo" | "roxo" | "esmeralda";
+export type PresetId = "indigo" | "roxo" | "esmeralda" | "mongodb";
 
 /**
  * PALETAS PRONTAS ("presets").
@@ -179,6 +179,34 @@ export const presets: Record<PresetId, Preset> = {
       team: "#f59e0b",
       cost_center: "#ef4444",
       server: "#64748b",
+    },
+  },
+
+  // MongoDB — identidade visual da MongoDB: verde-floresta como primária,
+  // o verde "spring" característico como destaque, e o verde-escuro quase
+  // preto (evergreen) no texto. Nós do grafo em tons de verde (escuro -> claro).
+  mongodb: {
+    nome: "MongoDB",
+    colors: {
+      primary: "#00684A",
+      primaryHover: "#023430",
+      accent: "#00ED64",
+      background: "#f0faf5",
+      surface: "#ffffff",
+      text: "#001E2B",
+      textMuted: "#5c7d70",
+      border: "#c7e8d8",
+      danger: "#dc2626",
+    },
+    graphColors: {
+      vendor: "#001E2B",
+      product: "#023430",
+      contract: "#00513A",
+      license: "#00684A",
+      project: "#00875A",
+      team: "#00A862",
+      cost_center: "#00CC6A",
+      server: "#00ED64",
     },
   },
 };
