@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.db import get_db
 from app.graph import costs, graphdata, queries, subgraph
 from app.models.schemas import Collections as C
-from app.retrieval import vector_search
+from app.retrieval import demo_cache, vector_search
 
 
 def _licenca_detalhe(db, license_id: str) -> Tuple[Optional[str], Optional[float], Optional[str]]:
@@ -63,6 +63,30 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
     tempos: Dict[str, float] = {}
     hits = vector_search.search(query, k=k, tempos=tempos)
     return build_from_hits(query, hits, k, tempos)
+
+
+def build_context_cached(query: str, k: int = 3) -> Dict[str, Any]:
+    """
+    Igual a `build_context`, mas serve as perguntas FIXAS da demo de um cache em
+    memória (retrieval inteiro: vetorial + grafo). Em cache HIT, pula embedding,
+    $vectorSearch e travessia — sobra só o Claude — e as `consultas` (as duas
+    fases do GraphRAG) vêm intactas do cache, para o painel "Ver a consulta"
+    ficar idêntico. Em cache MISS, calcula normal e guarda. Perguntas fora da
+    whitelist passam direto (comportamento idêntico ao `build_context`).
+    """
+    cached = demo_cache.obter(query, k)
+    if cached is not None:
+        # Tempos zerados + flag: nada foi para a rede nas etapas de retrieval.
+        cached["tempos"] = {
+            "cache": True,
+            "embedding_query_ms": 0.0,
+            "vector_search_ms": 0.0,
+            "grafo_lookup_agg_ms": 0.0,
+        }
+        return cached
+    ctx = build_context(query, k)
+    demo_cache.guardar(query, k, ctx)
+    return ctx
 
 
 def build_from_hits(

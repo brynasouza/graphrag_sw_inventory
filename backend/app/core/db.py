@@ -22,7 +22,14 @@ def get_client() -> MongoClient:
     """Cria (na primeira vez) e devolve o cliente único do MongoDB."""
     global _client
     if _client is None:
-        _client = MongoClient(settings.mongodb_uri)
+        # Timeouts curtos: se o Atlas estiver fora do ar, a falha aparece em
+        # ~5s (com mensagem clara na tela) em vez de congelar os 30s do default
+        # do pymongo — o que numa demo pareceria travamento.
+        _client = MongoClient(
+            settings.mongodb_uri,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+        )
     return _client
 
 
