@@ -13,6 +13,7 @@ import {
   gastoPorFornecedor,
   licencasVencendo,
 } from "../api";
+import { VerConsulta } from "../components/VerConsulta";
 
 const DIAS_VENCIMENTO = 90;
 
@@ -33,6 +34,10 @@ export function Painel() {
   const [licencas, setLicencas] = useState<Licenca[]>([]);
   const [porFornecedor, setPorFornecedor] = useState<GastoFornecedor[]>([]);
   const [porCentro, setPorCentro] = useState<GastoCentro[]>([]);
+  // Consultas MongoDB reais de cada card (painel "Ver a consulta").
+  const [consultaLicencas, setConsultaLicencas] = useState("");
+  const [consultaFornecedor, setConsultaFornecedor] = useState("");
+  const [consultaCentro, setConsultaCentro] = useState("");
   const [erro, setErro] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
 
@@ -43,9 +48,12 @@ export function Painel() {
       gastoPorCentro(),
     ])
       .then(([l, f, c]) => {
-        setLicencas(l);
-        setPorFornecedor(f);
-        setPorCentro(c);
+        setLicencas(l.dados);
+        setConsultaLicencas(l.consulta);
+        setPorFornecedor(f.dados);
+        setConsultaFornecedor(f.consulta);
+        setPorCentro(c.dados);
+        setConsultaCentro(c.consulta);
       })
       .catch((e) => setErro(e instanceof Error ? e.message : "Falha ao carregar o painel."))
       .finally(() => setCarregando(false));
@@ -116,6 +124,11 @@ export function Painel() {
                 </tbody>
               </table>
             )}
+            <VerConsulta
+              consultas={[
+                { titulo: "Licenças vencendo (find)", consulta: consultaLicencas },
+              ]}
+            />
           </div>
 
           <div className="painel-duplo">
@@ -137,6 +150,11 @@ export function Painel() {
                   ))}
                 </tbody>
               </table>
+              <VerConsulta
+                consultas={[
+                  { titulo: "Gasto por fornecedor (aggregate)", consulta: consultaFornecedor },
+                ]}
+              />
             </div>
 
             <div className="card">
@@ -159,6 +177,11 @@ export function Painel() {
                   ))}
                 </tbody>
               </table>
+              <VerConsulta
+                consultas={[
+                  { titulo: "Gasto por centro de custo (aggregate)", consulta: consultaCentro },
+                ]}
+              />
             </div>
           </div>
         </>

@@ -117,6 +117,38 @@ ficou salva na sessão.
 
 ---
 
+## Seed e embeddings
+
+O `seed.py` é **determinístico**: os `_id` são derivados de uma chave natural
+(`oid_estavel("colecao:chave")`), então rodá-lo de novo gera os mesmos
+identificadores. As datas são **relativas** à data-base (hoje à meia-noite UTC),
+fixável via env `SEED_DATA_BASE` — isso é de propósito, para "vencer em 90 dias"
+seguir verdadeiro.
+
+O seed **não** toca em `search_index`; quem a reconstrói é o
+`build_embeddings.py`. Como os `_id` são estáveis, re-seedar mantém os
+`entity_id` válidos: só rode o `build_embeddings` de novo quando as entidades
+ou seus textos mudarem, não a cada seed.
+
+O texto que o `build_embeddings.py` vetoriza inclui uma **âncora funcional
+cirúrgica** (`_DESCRICAO_FUNCIONAL`) só em OpenShift, Confluence e Jira — para
+que perguntas semânticas como "plataforma de contêineres" e "colaboração e
+documentação" resolvam com margem folgada. VMware/vSphere **não** entram: a
+virtualização já resolve sozinha (enriquecer o que funciona só adiciona ruído).
+O conceito vive apenas no texto indexado (fonte do embedding), **nunca** nos
+campos de negócio — um `find()` por palavra-chave continua não achando, e é
+essa a diferença que a busca vetorial prova na demo. Mudou uma frase dessas?
+Rode o `build_embeddings` de novo.
+
+## Painel "Ver a consulta"
+
+Cada tela mostra o comando MongoDB real por trás do resultado (bloco recolhível,
+copiável). A regra vale aqui também: **o comando exibido é o que de fato roda** —
+o pipeline é montado num builder único, reaproveitado pela execução e pela
+exibição. Nunca fabrique um pipeline "de vitrine". Nos GETs isso vem pelo
+parâmetro opt-in `?incluir_consulta=true` (sem ele, a resposta é a de sempre —
+por isso os testes continuam verdes); no `/ask`, vem em `context.consultas`.
+
 ## Pendências conhecidas
 
 - `servers` não tem vínculo com `licenses`. Enquanto isso não existir, "sockets consumidos

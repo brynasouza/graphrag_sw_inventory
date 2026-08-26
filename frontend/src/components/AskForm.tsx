@@ -1,13 +1,19 @@
 /**
- * Formulário de pergunta: caixa de texto + botão, com sugestões prontas
- * (as 3 perguntas-alvo do projeto).
+ * Formulário de pergunta: caixa de texto + botão, com sugestões prontas.
+ *
+ * As três primeiras são SEMÂNTICAS de propósito: o termo ("virtualização",
+ * "contêineres", "colaboração/documentação") não existe em nenhum campo do
+ * banco — só a busca vetorial as resolve para a entidade certa (um find() por
+ * palavra-chave devolveria vazio). A última exercita a travessia $lookup
+ * (impacto), para a demo mostrar as duas etapas do GraphRAG.
  */
 import { FormEvent, useState } from "react";
 
 const EXEMPLOS = [
-  "Quais projetos usam a licença da VMware e quando ela expira?",
+  "Quanto custa nossa virtualização?",
+  "O que temos de plataforma de contêineres?",
+  "Nossos gastos com colaboração e documentação",
   "Se a licença vSphere Standard 2026 expirar, quais times são impactados?",
-  "Quanto gastamos com a VMware por centro de custo?",
 ];
 
 interface Props {

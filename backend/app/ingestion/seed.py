@@ -4,25 +4,56 @@ Popula o MongoDB com dados de exemplo de uma empresa brasileira média.
 Rode a partir da pasta backend/ com:
     .venv/bin/python -m app.ingestion.seed
 
-O script é idempotente: apaga as coleções e recria tudo do zero, então
-pode ser rodado quantas vezes quiser. As referências entre coleções são
-gravadas com o _id REAL de cada documento (integridade garantida).
+O script é DETERMINÍSTICO e idempotente: apaga as coleções e recria tudo do
+zero com os MESMOS _id a cada execução. Como derivamos os _id de uma chave
+natural (nome/código), rodar o seed duas vezes produz exatamente os mesmos
+identificadores — o que também mantém a coleção `search_index` válida (os
+`entity_id` continuam apontando para documentos que existem).
 
-Datas de expiração são calculadas a partir de HOJE, então a regra
-"algumas licenças vencem nos próximos 90 dias" continua verdadeira
-independentemente de quando você rodar o seed.
+Sobre as datas: são RELATIVAS a uma data-base (padrão: hoje à meia-noite UTC).
+Isso é de propósito — a regra "algumas licenças vencem nos próximos 90 dias"
+precisa continuar verdadeira independentemente de quando o seed roda. Para
+fixar a data-base (ex.: em teste), defina a variável de ambiente
+SEED_DATA_BASE com uma data ISO, por exemplo: SEED_DATA_BASE=2026-01-01.
+
+Atenção: o seed NÃO mexe na coleção `search_index`. Quem a (re)constrói é o
+`build_embeddings.py`. Rode-o de novo só quando as entidades ou seus textos
+mudarem — não é preciso a cada seed, já que os _id são estáveis.
 """
+import hashlib
+import os
 from datetime import datetime, timedelta
+
+from bson import ObjectId
 
 from app.core.db import get_db
 from app.models.schemas import Collections as C
 
-HOJE = datetime.utcnow()
+
+def oid_estavel(chave: str) -> ObjectId:
+    """
+    Gera um ObjectId determinístico a partir de uma chave natural.
+    A mesma chave sempre devolve o mesmo _id — é isso que torna o seed
+    reproduzível. A chave já vem "namespaced" por coleção (ex.: "vendor:VMware")
+    para não haver colisão entre coleções diferentes.
+    """
+    return ObjectId(hashlib.md5(chave.encode()).hexdigest()[:24])
+
+
+def _data_base() -> datetime:
+    """Data-base das datas relativas: SEED_DATA_BASE (se definida) ou hoje 00:00 UTC."""
+    iso = os.getenv("SEED_DATA_BASE")
+    if iso:
+        return datetime.fromisoformat(iso)
+    return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+DATA_BASE = _data_base()
 
 
 def dias(n: int) -> datetime:
-    """Data daqui a n dias (n negativo = no passado)."""
-    return HOJE + timedelta(days=n)
+    """Data daqui a n dias a partir da data-base (n negativo = no passado)."""
+    return DATA_BASE + timedelta(days=n)
 
 
 def seed():
@@ -39,7 +70,8 @@ def seed():
                        ("Financeiro", "CC-FIN"),
                        ("Operações", "CC-OPS")]:
         cc[code] = db[C.COST_CENTERS].insert_one(
-            {"name": name, "code": code}).inserted_id
+            {"_id": oid_estavel(f"cost_center:{code}"),
+             "name": name, "code": code}).inserted_id
 
     # 3) Times (5) -> centro de custo -----------------------------------
     teams = {}
@@ -49,7 +81,8 @@ def seed():
                           ("Dados & BI", "CC-FIN"),
                           ("Aplicações Corporativas", "CC-OPS")]:
         teams[name] = db[C.TEAMS].insert_one(
-            {"name": name, "cost_center_id": cc[cc_code]}).inserted_id
+            {"_id": oid_estavel(f"team:{name}"),
+             "name": name, "cost_center_id": cc[cc_code]}).inserted_id
 
     # 4) Projetos (8) -> time -------------------------------------------
     projects = {}
@@ -62,12 +95,14 @@ def seed():
                        ("Intranet", "Aplicações Corporativas"),
                        ("Data Lake", "Dados & BI")]:
         projects[name] = db[C.PROJECTS].insert_one(
-            {"name": name, "team_id": teams[team]}).inserted_id
+            {"_id": oid_estavel(f"project:{name}"),
+             "name": name, "team_id": teams[team]}).inserted_id
 
     # 5) Fornecedores (5) -----------------------------------------------
     vendors = {}
     for name in ["VMware", "Microsoft", "Oracle", "Red Hat", "Atlassian"]:
-        vendors[name] = db[C.VENDORS].insert_one({"name": name}).inserted_id
+        vendors[name] = db[C.VENDORS].insert_one(
+            {"_id": oid_estavel(f"vendor:{name}"), "name": name}).inserted_id
 
     # 6) Produtos -> fornecedor -----------------------------------------
     products = {}
@@ -81,7 +116,8 @@ def seed():
     for vendor, prods in catalogo.items():
         for p in prods:
             products[p] = db[C.PRODUCTS].insert_one(
-                {"name": p, "vendor_id": vendors[vendor]}).inserted_id
+                {"_id": oid_estavel(f"product:{p}"),
+                 "name": p, "vendor_id": vendors[vendor]}).inserted_id
 
     # 7) Contratos (1 por fornecedor) -----------------------------------
     contracts = {}
@@ -94,6 +130,7 @@ def seed():
     ]
     for vendor, ref, value, start, end in contratos_def:
         contracts[vendor] = db[C.CONTRACTS].insert_one({
+            "_id": oid_estavel(f"contract:{ref}"),
             "vendor_id": vendors[vendor], "reference": ref,
             "value": value, "currency": "BRL",
             "starts_at": start, "ends_at": end,
@@ -121,6 +158,7 @@ def seed():
     licenses = {}  # rótulo -> _id
     for prod, vendor, rotulo, dvenc, custo, metric in licencas_def:
         licenses[rotulo] = db[C.LICENSES].insert_one({
+            "_id": oid_estavel(f"license:{rotulo}"),
             "name": rotulo,
             "product_id": products[prod],
             "contract_id": contracts[vendor],
@@ -156,6 +194,7 @@ def seed():
     ]
     for rotulo, proj, qtd in alocacoes_def:
         db[C.ALLOCATIONS].insert_one({
+            "_id": oid_estavel(f"allocation:{rotulo}:{proj}"),
             "license_id": licenses[rotulo],
             "project_id": projects[proj],
             "quantity": qtd,
@@ -175,6 +214,7 @@ def seed():
     ]
     for hostname, sockets, proj in servers_def:
         db[C.SERVERS].insert_one({
+            "_id": oid_estavel(f"server:{hostname}"),
             "hostname": hostname,
             "cpu_sockets": sockets,
             "project_id": projects[proj],

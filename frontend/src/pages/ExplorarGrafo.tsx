@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { GraphData, GraphNode, explorarGrafo } from "../api";
 import { GraphView, estiloDoTipo } from "../components/GraphView";
+import { VerConsulta } from "../components/VerConsulta";
 import { Theme } from "../theme/theme";
 import { useTheme } from "../theme/ThemeContext";
 
@@ -57,12 +58,16 @@ function Detalhes({ tema, node }: { tema: Theme; node: GraphNode | null }) {
 export function ExplorarGrafo() {
   const tema = useTheme();
   const [data, setData] = useState<GraphData | null>(null);
+  const [consulta, setConsulta] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [selecionado, setSelecionado] = useState<GraphNode | null>(null);
 
   useEffect(() => {
     explorarGrafo()
-      .then(setData)
+      .then(({ dados, consulta }) => {
+        setData(dados);
+        setConsulta(consulta);
+      })
       .catch((e) => setErro(e instanceof Error ? e.message : "Falha ao carregar o grafo."));
   }, []);
 
@@ -98,6 +103,17 @@ export function ExplorarGrafo() {
             <Detalhes tema={tema} node={selecionado} />
           </aside>
         </div>
+      )}
+
+      {data && consulta && (
+        <VerConsulta
+          consultas={[
+            {
+              titulo: "Leitura das 9 coleções (find) — o grafo é montado no backend",
+              consulta,
+            },
+          ]}
+        />
       )}
     </div>
   );

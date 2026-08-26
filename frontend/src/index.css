@@ -218,6 +218,64 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
+ * Painel "Ver a consulta" (comando MongoDB por trás do resultado)
+ * Reaproveita o visual de .facts pre. Sem cores fixas: tudo via tema.
+ * ------------------------------------------------------------------------- */
+.consulta summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.consulta-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+.consulta-cabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.consulta-titulo {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.consulta-copiar {
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.consulta-copiar:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.consulta pre {
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 14px;
+  overflow: auto;
+  font-size: 0.8rem;
+  max-height: 380px;
+  margin: 0;
+}
+/* "Resolveu para": entidade(s) reais que o $vectorSearch retornou. */
+.consulta-resultado {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* ---------------------------------------------------------------------------
  * Grafo (react-force-graph)
  * ------------------------------------------------------------------------- */
 .graph-wrap {

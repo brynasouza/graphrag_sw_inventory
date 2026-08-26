@@ -53,6 +53,15 @@ export interface Candidato {
   score: number;
 }
 
+// Um comando MongoDB real por trás do resultado (painel "Ver a consulta").
+export interface Consulta {
+  titulo: string;
+  consulta: string;
+  // Opcional: para o $vectorSearch, as entidades reais que a busca resolveu
+  // (nome, tipo e score) — evidencia a etapa semântica antes do $lookup.
+  resultado?: string;
+}
+
 export interface AskResponse {
   answer: string;
   context: {
@@ -61,7 +70,14 @@ export interface AskResponse {
     fatos: any[];
     gastos_por_fornecedor: any[];
     subgrafo: GraphData; // mini-grafo das entidades usadas na resposta
+    consultas: Consulta[]; // comandos MongoDB que rodaram nesta resposta
   };
+}
+
+// Envelope dos GETs quando pedimos a consulta junto (?incluir_consulta=true).
+export interface ComConsulta<T> {
+  dados: T;
+  consulta: string;
 }
 
 export async function ask(question: string): Promise<AskResponse> {
@@ -74,9 +90,9 @@ export async function ask(question: string): Promise<AskResponse> {
   return res.json();
 }
 
-/** Grafo inteiro do inventário (página "Explorar Grafo"). */
-export function explorarGrafo(): Promise<GraphData> {
-  return getJSON<GraphData>("/graph/explore");
+/** Grafo inteiro do inventário + a consulta real (página "Explorar Grafo"). */
+export function explorarGrafo(): Promise<ComConsulta<GraphData>> {
+  return getJSON<ComConsulta<GraphData>>("/graph/explore?incluir_consulta=true");
 }
 
 // --- Dados do Painel (reusam endpoints determinísticos já existentes) ---
@@ -100,12 +116,18 @@ export interface GastoCentro {
   currency: string;
 }
 
-export function licencasVencendo(dias: number): Promise<Licenca[]> {
-  return getJSON<Licenca[]>(`/graph/licenses?expiring_in_days=${dias}`);
+export function licencasVencendo(dias: number): Promise<ComConsulta<Licenca[]>> {
+  return getJSON<ComConsulta<Licenca[]>>(
+    `/graph/licenses?expiring_in_days=${dias}&incluir_consulta=true`
+  );
 }
-export function gastoPorFornecedor(): Promise<GastoFornecedor[]> {
-  return getJSON<GastoFornecedor[]>("/graph/costs/by-vendor");
+export function gastoPorFornecedor(): Promise<ComConsulta<GastoFornecedor[]>> {
+  return getJSON<ComConsulta<GastoFornecedor[]>>(
+    "/graph/costs/by-vendor?incluir_consulta=true"
+  );
 }
-export function gastoPorCentro(): Promise<GastoCentro[]> {
-  return getJSON<GastoCentro[]>("/graph/costs/by-cost-center");
+export function gastoPorCentro(): Promise<ComConsulta<GastoCentro[]>> {
+  return getJSON<ComConsulta<GastoCentro[]>>(
+    "/graph/costs/by-cost-center?incluir_consulta=true"
+  );
 }
