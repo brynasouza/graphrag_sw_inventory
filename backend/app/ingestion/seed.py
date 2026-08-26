@@ -224,6 +224,16 @@ def seed():
     # 11) Índices das FKs (para as junções não varrerem tudo) -----------
     ensure_indexes(db)
 
+    # 12) Token de versão do seed --------------------------------------
+    # A API guarda em memória o retrieval das perguntas fixas da demo.
+    # Este doc é o sinal para invalidar esse cache: como o seed muda o
+    # `ran_at`, a API percebe que os dados mudaram e recomputa.
+    db[C.META].replace_one(
+        {"_id": "seed"},
+        {"_id": "seed", "ran_at": datetime.utcnow()},
+        upsert=True,
+    )
+
     # Resumo -------------------------------------------------------------
     print("Seed concluído. Documentos por coleção:")
     for nome in [C.VENDORS, C.PRODUCTS, C.CONTRACTS, C.LICENSES,

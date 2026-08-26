@@ -14,14 +14,40 @@ from typing import Any, Dict, Iterator
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from pymongo.errors import OperationFailure
-from voyageai.error import VoyageError
+from pymongo.errors import OperationFailure, PyMongoError
+from voyageai.error import RateLimitError, VoyageError
 import anthropic
 
 from app.llm import answer
-from app.retrieval import context, vector_search
+from app.retrieval import context, demo_cache, vector_search
 
 router = APIRouter(prefix="/ask", tags=["graphrag"])
+
+
+def _detalhe_erro(exc: Exception) -> str:
+    """
+    Traduz uma exceção em uma mensagem CLARA para a tela — sem jargão e sem
+    stack trace. Um único lugar decide a mensagem, então o /ask (HTTP 503) e o
+    /ask/stream (evento SSE 'erro') dizem exatamente a mesma coisa.
+
+    A ordem importa: do mais específico para o mais genérico. RateLimitError e
+    OperationFailure são subclasses (de VoyageError e PyMongoError), então vêm
+    antes das suas bases.
+    """
+    if isinstance(exc, RateLimitError):
+        return ("Busca vetorial em limite de requisições (Voyage). Aguarde "
+                "alguns segundos e tente de novo.")
+    if isinstance(exc, (RuntimeError, VoyageError, anthropic.AnthropicError)):
+        return ("Serviço de IA indisponível. Confira as chaves no .env. "
+                "Detalhe: " + str(exc))
+    if isinstance(exc, OperationFailure):
+        return ("Busca vetorial indisponível (índice 'vector_index' no Atlas?). "
+                "Detalhe: " + str(exc))
+    if isinstance(exc, PyMongoError):
+        return ("Banco de dados (Atlas) indisponível no momento. Tente "
+                "novamente em instantes.")
+    # Qualquer outra falha inesperada: mensagem genérica, mas nunca tela branca.
+    return "Não foi possível concluir agora. Tente novamente."
 
 
 class Pergunta(BaseModel):
@@ -38,9 +64,10 @@ def perguntar(body: Pergunta):
     try:
         t_inicio = time.perf_counter()
 
-        # build_context já mede embedding_query_ms, vector_search_ms e
-        # grafo_lookup_agg_ms dentro de ctx["tempos"].
-        ctx = context.build_context(body.question, k=body.k)
+        # build_context_cached serve as perguntas fixas da demo do cache (retrieval
+        # inteiro); nas demais, é igual a build_context e mede embedding_query_ms,
+        # vector_search_ms e grafo_lookup_agg_ms dentro de ctx["tempos"].
+        ctx = context.build_context_cached(body.question, k=body.k)
 
         t_claude = time.perf_counter()
         resposta = answer.generate_answer(body.question, ctx)
@@ -61,20 +88,10 @@ def perguntar(body: Pergunta):
         )
 
         return {"answer": resposta, "context": ctx}
-    except (RuntimeError, VoyageError, anthropic.AnthropicError) as exc:
-        # Chave/serviço de IA indisponível -> mensagem clara.
-        raise HTTPException(
-            status_code=503,
-            detail="Serviço de IA indisponível. Confira as chaves no .env. "
-                   "Detalhe: " + str(exc),
-        )
-    except OperationFailure as exc:
-        # Índice de Vector Search ausente no Atlas.
-        raise HTTPException(
-            status_code=503,
-            detail="Busca vetorial indisponível (índice 'vector_index' no "
-                   "Atlas?). Detalhe: " + str(exc),
-        )
+    except Exception as exc:  # noqa: BLE001 - traduz QUALQUER falha em 503 amigável
+        # Nunca deixamos um 500 cru chegar à tela: toda falha vira uma mensagem
+        # clara. _detalhe_erro classifica o tipo (IA, índice, Atlas fora, etc.).
+        raise HTTPException(status_code=503, detail=_detalhe_erro(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -103,22 +120,44 @@ def _fluxo_resposta(pergunta: str, k: int) -> Iterator[str]:
     try:
         # Etapa 1: busca vetorial (acha o nó de entrada).
         yield _sse("etapa", {"etapa": "buscando", "label": "Buscando a entidade"})
-        hits = vector_search.search(pergunta, k=k, tempos=tempos)
-        resolvido = ", ".join(
-            f"{h['name']} ({h['entity_type']}, score {h['score']:.3f})" for h in hits
-        )
 
-        # Etapa 2: travessia do grafo (reúne os fatos).
-        yield _sse("etapa", {
-            "etapa": "percorrendo",
-            "label": "Percorrendo o grafo",
-            "resolvido": resolvido,
-        })
-        ctx = context.build_from_hits(pergunta, hits, k, tempos)
+        # Perguntas fixas da demo podem vir do cache (retrieval inteiro). No hit,
+        # pulamos embedding + $vectorSearch + travessia; o `resolvido` e as
+        # `consultas` (as duas fases) são reconstruídos do próprio contexto
+        # cacheado, então a tela fica idêntica a uma execução normal.
+        ctx = demo_cache.obter(pergunta, k)
+        cache_hit = ctx is not None
 
-        # Manda o contexto JÁ — a tela desenha o mini-grafo e o painel
-        # "Ver a consulta" enquanto o Claude ainda está redigindo.
-        yield _sse("contexto", ctx)
+        if cache_hit:
+            tempos["cache"] = True
+            resolvido = ", ".join(
+                f"{c['nome']} ({c['tipo']}, score {c['score']:.3f})"
+                for c in ctx.get("candidatos", [])
+            )
+            yield _sse("etapa", {
+                "etapa": "percorrendo",
+                "label": "Percorrendo o grafo",
+                "resolvido": resolvido,
+            })
+            yield _sse("contexto", ctx)
+        else:
+            hits = vector_search.search(pergunta, k=k, tempos=tempos)
+            resolvido = ", ".join(
+                f"{h['name']} ({h['entity_type']}, score {h['score']:.3f})" for h in hits
+            )
+
+            # Etapa 2: travessia do grafo (reúne os fatos).
+            yield _sse("etapa", {
+                "etapa": "percorrendo",
+                "label": "Percorrendo o grafo",
+                "resolvido": resolvido,
+            })
+            ctx = context.build_from_hits(pergunta, hits, k, tempos)
+            demo_cache.guardar(pergunta, k, ctx)
+
+            # Manda o contexto JÁ — a tela desenha o mini-grafo e o painel
+            # "Ver a consulta" enquanto o Claude ainda está redigindo.
+            yield _sse("contexto", ctx)
 
         # Etapa 3: redação da resposta (Claude), palavra a palavra.
         yield _sse("etapa", {"etapa": "redigindo", "label": "Redigindo a resposta"})
@@ -139,12 +178,12 @@ def _fluxo_resposta(pergunta: str, k: int) -> Iterator[str]:
         )
 
         yield _sse("fim", {"tempos": tempos})
-    except (RuntimeError, VoyageError, anthropic.AnthropicError) as exc:
-        yield _sse("erro", {"detail": "Serviço de IA indisponível. Confira as "
-                                      "chaves no .env. Detalhe: " + str(exc)})
-    except OperationFailure as exc:
-        yield _sse("erro", {"detail": "Busca vetorial indisponível (índice "
-                                      "'vector_index' no Atlas?). Detalhe: " + str(exc)})
+    except Exception as exc:  # noqa: BLE001 - o stream SEMPRE fecha com um frame 'erro'
+        # Ponto-chave da resiliência: qualquer falha (Atlas fora, Voyage em
+        # limite, erro do Claude no meio do texto) vira um evento 'erro' antes
+        # de a conexão cair. Assim o front nunca recebe um corte silencioso —
+        # os tokens já enviados ficam na tela e a mensagem explica a parada.
+        yield _sse("erro", {"detail": _detalhe_erro(exc)})
 
 
 @router.post("/stream")

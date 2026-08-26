@@ -110,3 +110,6 @@ class Collections:
     # Coleção auxiliar da busca vetorial (Etapa 5): guarda o texto de cada
     # entidade pesquisável e seu embedding, para o Atlas Vector Search.
     SEARCH_INDEX = "search_index"
+    # Metadados da aplicação. Hoje guarda só o token de versão do seed
+    # ({_id:"seed", ran_at}), usado para invalidar o cache do retrieval.
+    META = "app_meta"

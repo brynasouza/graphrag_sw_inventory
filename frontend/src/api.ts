@@ -110,15 +110,19 @@ export interface AskStreamHandlers {
   onErro?: (detail: string) => void;
 }
 
-/** Processa um frame SSE ("event: X\n data: {...}") e chama o handler certo. */
-function processarFrameSSE(frame: string, h: AskStreamHandlers): void {
+/**
+ * Processa um frame SSE ("event: X\n data: {...}") e chama o handler certo.
+ * Devolve o NOME do evento (ou null se o frame não tinha dados), para o laço de
+ * leitura saber se um frame terminal ("fim"/"erro") já chegou.
+ */
+function processarFrameSSE(frame: string, h: AskStreamHandlers): string | null {
   let evento = "message";
   const linhasData: string[] = [];
   for (const linha of frame.split("\n")) {
     if (linha.startsWith("event:")) evento = linha.slice(6).trim();
     else if (linha.startsWith("data:")) linhasData.push(linha.slice(5).replace(/^ /, ""));
   }
-  if (linhasData.length === 0) return;
+  if (linhasData.length === 0) return null;
   const dados = JSON.parse(linhasData.join("\n"));
   switch (evento) {
     case "etapa":
@@ -137,6 +141,7 @@ function processarFrameSSE(frame: string, h: AskStreamHandlers): void {
       h.onErro?.((dados as { detail: string }).detail);
       break;
   }
+  return evento;
 }
 
 /**
@@ -158,6 +163,10 @@ export async function askStream(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  // O backend sempre fecha com um frame terminal ("fim" ou "erro"). Se a
+  // conexão cair sem nenhum deles (ex.: o servidor morreu no meio), não
+  // deixamos a tela sem explicação — avisamos que a resposta foi interrompida.
+  let recebeuTerminal = false;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -167,8 +176,16 @@ export async function askStream(
     while ((sep = buffer.indexOf("\n\n")) !== -1) {
       const frame = buffer.slice(0, sep);
       buffer = buffer.slice(sep + 2);
-      if (frame.trim()) processarFrameSSE(frame, handlers);
+      if (frame.trim()) {
+        const evento = processarFrameSSE(frame, handlers);
+        if (evento === "fim" || evento === "erro") recebeuTerminal = true;
+      }
     }
+  }
+  if (!recebeuTerminal) {
+    handlers.onErro?.(
+      "A conexão foi interrompida antes da resposta terminar. Tente novamente."
+    );
   }
 }
 
