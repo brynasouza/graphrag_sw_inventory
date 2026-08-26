@@ -13,7 +13,7 @@ Seguimos a referência atual da Anthropic:
 O cliente é preguiçoso; erro amigável se a chave faltar.
 """
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 import anthropic
 
@@ -54,20 +54,29 @@ def _get_client() -> anthropic.Anthropic:
 _CHAVES_SO_INTERFACE = {"consultas", "tempos"}
 
 
-def generate_answer(query: str, context: Dict[str, Any]) -> str:
+def _build_prompt(query: str, context: Dict[str, Any]) -> str:
     """
-    Gera a resposta em linguagem natural para `query` usando `context`
-    (os fatos do grafo). Devolve apenas o texto da resposta.
+    Monta o prompt do usuário a partir da pergunta + fatos do grafo.
+    Usado tanto pela geração normal quanto pela em streaming, para não haver
+    divergência entre as duas.
     """
     # Manda ao modelo só os fatos — tira o que é exclusivo da interface.
     fatos = {k: v for k, v in context.items() if k not in _CHAVES_SO_INTERFACE}
     # `default=str` garante que datas/ObjectId virem texto no JSON.
     fatos_json = json.dumps(fatos, ensure_ascii=False, default=str, indent=2)
-    prompt = (
+    return (
         f"Pergunta do usuário:\n{query}\n\n"
         f"Fatos disponíveis (JSON, vindos do grafo de inventário):\n{fatos_json}\n\n"
         "Escreva a resposta final para o usuário com base apenas nesses fatos."
     )
+
+
+def generate_answer(query: str, context: Dict[str, Any]) -> str:
+    """
+    Gera a resposta em linguagem natural para `query` usando `context`
+    (os fatos do grafo). Devolve apenas o texto da resposta.
+    """
+    prompt = _build_prompt(query, context)
 
     msg = _get_client().messages.create(
         model=MODEL,
@@ -80,3 +89,25 @@ def generate_answer(query: str, context: Dict[str, Any]) -> str:
     # A resposta pode conter blocos de "pensamento" + texto; pegamos só o texto.
     partes = [b.text for b in msg.content if getattr(b, "type", None) == "text"]
     return "".join(partes).strip()
+
+
+def stream_answer(query: str, context: Dict[str, Any]) -> Iterator[str]:
+    """
+    Igual ao generate_answer, mas ENTREGA O TEXTO EM PEDAÇOS conforme o Claude
+    escreve (streaming). Serve ao endpoint /ask/stream: a tela mostra a resposta
+    palavra a palavra em vez de esperar tudo ficar pronto.
+
+    `text_stream` já entrega SÓ o texto final (ignora os blocos de "pensamento"
+    do adaptive thinking), então não precisamos filtrar aqui.
+    """
+    prompt = _build_prompt(query, context)
+
+    with _get_client().messages.stream(
+        model=MODEL,
+        max_tokens=1500,
+        thinking={"type": "adaptive"},
+        system=SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for pedaco in stream.text_stream:
+            yield pedaco

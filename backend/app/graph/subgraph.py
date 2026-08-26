@@ -59,16 +59,127 @@ def _expand_license(db, b: G.GraphBuilder, lic: Dict[str, Any]) -> None:
         b.add_edge(lic["_id"], proj["_id"], G.REL_ALOCACAO, str(a.get("quantity")))
 
 
+# ---------------------------------------------------------------------------
+# Subgrafo da LICENÇA numa AGREGAÇÃO SÓ (uma ida ao banco, não ~15).
+#
+# Antes, o subgrafo da licença fazia um laço Python aninhado com um find_one
+# por alocação -> projeto -> time -> centro -> servidores: dezenas de idas e
+# voltas SEQUENCIAIS à rede, que dominavam o tempo do /ask. Aqui trazemos toda
+# a vizinhança da licença em UM pipeline com $lookup aninhado; depois montamos
+# o {nodes, edges} em Python puro (custo zero de rede). O resultado tem os
+# MESMOS nós, arestas e props de antes.
+#
+# Usamos a forma `let` + `pipeline` + `$expr` nos $lookup aninhados (funciona
+# em qualquer versão), com preserveNullAndEmptyArrays para não perder a licença
+# caso algum vínculo (produto, contrato…) esteja ausente.
+# ---------------------------------------------------------------------------
+def _pipeline_subgrafo_licenca(oid) -> List[Dict[str, Any]]:
+    return [
+        {"$match": {"_id": oid}},
+        # licença -> produto -> fornecedor
+        {"$lookup": {
+            "from": C.PRODUCTS,
+            "let": {"pid": "$product_id"},
+            "pipeline": [
+                {"$match": {"$expr": {"$eq": ["$_id", "$$pid"]}}},
+                {"$lookup": {"from": C.VENDORS, "localField": "vendor_id",
+                             "foreignField": "_id", "as": "vendor"}},
+                {"$unwind": {"path": "$vendor", "preserveNullAndEmptyArrays": True}},
+            ],
+            "as": "product",
+        }},
+        {"$unwind": {"path": "$product", "preserveNullAndEmptyArrays": True}},
+        # licença -> contrato
+        {"$lookup": {"from": C.CONTRACTS, "localField": "contract_id",
+                     "foreignField": "_id", "as": "contract"}},
+        {"$unwind": {"path": "$contract", "preserveNullAndEmptyArrays": True}},
+        # licença -> alocações -> (projeto -> time -> centro) + servidores do projeto
+        {"$lookup": {
+            "from": C.ALLOCATIONS,
+            "let": {"lid": "$_id"},
+            "pipeline": [
+                {"$match": {"$expr": {"$eq": ["$license_id", "$$lid"]}}},
+                {"$lookup": {
+                    "from": C.PROJECTS,
+                    "let": {"prid": "$project_id"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$eq": ["$_id", "$$prid"]}}},
+                        {"$lookup": {
+                            "from": C.TEAMS,
+                            "let": {"tid": "$team_id"},
+                            "pipeline": [
+                                {"$match": {"$expr": {"$eq": ["$_id", "$$tid"]}}},
+                                {"$lookup": {"from": C.COST_CENTERS,
+                                             "localField": "cost_center_id",
+                                             "foreignField": "_id", "as": "cost_center"}},
+                                {"$unwind": {"path": "$cost_center",
+                                             "preserveNullAndEmptyArrays": True}},
+                            ],
+                            "as": "team",
+                        }},
+                        {"$unwind": {"path": "$team", "preserveNullAndEmptyArrays": True}},
+                        {"$lookup": {"from": C.SERVERS, "localField": "_id",
+                                     "foreignField": "project_id", "as": "servers"}},
+                    ],
+                    "as": "project",
+                }},
+                {"$unwind": {"path": "$project", "preserveNullAndEmptyArrays": True}},
+            ],
+            "as": "allocations",
+        }},
+    ]
+
+
+def _montar_subgrafo_licenca(b: G.GraphBuilder, lic: Dict[str, Any]) -> None:
+    """Monta nós/arestas a partir do documento único devolvido pela agregação."""
+    G.add_license(b, lic)
+
+    prod = lic.get("product")
+    if prod:
+        G.add_product(b, prod)
+        b.add_edge(lic["_id"], prod["_id"], G.REL_PRODUTO)
+        vend = prod.get("vendor")
+        if vend:
+            G.add_vendor(b, vend)
+            b.add_edge(prod["_id"], vend["_id"], G.REL_FORNECEDOR)
+
+    contr = lic.get("contract")
+    if contr:
+        G.add_contract(b, contr)
+        b.add_edge(lic["_id"], contr["_id"], G.REL_CONTRATO)
+
+    for a in lic.get("allocations", []):
+        proj = a.get("project")
+        if not proj:
+            continue
+        # projeto -> time -> centro de custo
+        G.add_project(b, proj)
+        team = proj.get("team")
+        if team:
+            G.add_team(b, team)
+            b.add_edge(proj["_id"], team["_id"], G.REL_TIME)
+            cc = team.get("cost_center")
+            if cc:
+                G.add_cost_center(b, cc)
+                b.add_edge(team["_id"], cc["_id"], G.REL_CENTRO)
+        # servidores do projeto
+        for s in proj.get("servers", []):
+            G.add_server(b, s)
+            b.add_edge(s["_id"], proj["_id"], G.REL_PROJETO)
+        # licença -> projeto (via allocation), rótulo = quantidade
+        b.add_edge(lic["_id"], proj["_id"], G.REL_ALOCACAO, str(a.get("quantity")))
+
+
 def subgraph_for_license(db, license_id: str) -> Dict[str, List[Dict[str, Any]]]:
-    """Subgrafo a partir de uma licença."""
+    """Subgrafo a partir de uma licença — numa agregação só."""
     oid = to_object_id(license_id)
     if oid is None:
         return dict(VAZIO)
-    lic = db[C.LICENSES].find_one({"_id": oid})
-    if lic is None:
+    docs = list(db[C.LICENSES].aggregate(_pipeline_subgrafo_licenca(oid)))
+    if not docs:
         return dict(VAZIO)
     b = G.GraphBuilder()
-    _expand_license(db, b, lic)
+    _montar_subgrafo_licenca(b, docs[0])
     return b.result()
 
 
