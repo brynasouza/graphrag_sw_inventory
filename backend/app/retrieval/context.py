@@ -19,6 +19,7 @@ Regra de ouro do GraphRAG: o grafo garante os FATOS; o LLM só escreve o
 texto. Por isso reunimos aqui apenas dados verificáveis do banco.
 """
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_db
@@ -51,20 +52,77 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
     Buscamos os `k` melhores candidatos e reunimos os fatos de cada um.
     O Claude usa só o que for relevante — trazer os 3 melhores deixa a
     resposta robusta mesmo quando a pergunta é ambígua.
+
+    É a junção de duas etapas: a busca vetorial (acha o nó de entrada) e a
+    montagem do grafo (reúne os fatos). O /ask usa esta função inteira; o
+    /ask/stream chama as duas metades separadamente para mostrar o progresso
+    ("buscando" -> "percorrendo") entre elas.
+    """
+    # Instrumentação: o search preenche 'embedding_query_ms' e
+    # 'vector_search_ms'; build_from_hits mede 'grafo_lookup_agg_ms'.
+    tempos: Dict[str, float] = {}
+    hits = vector_search.search(query, k=k, tempos=tempos)
+    return build_from_hits(query, hits, k, tempos)
+
+
+def build_from_hits(
+    query: str,
+    hits: List[Dict[str, Any]],
+    k: int,
+    tempos: Dict[str, float],
+) -> Dict[str, Any]:
+    """
+    Segunda metade do build_context: dado o resultado da busca vetorial
+    (`hits`), percorre o grafo e monta o contexto final. Separada para que o
+    /ask/stream possa emitir a etapa "percorrendo o grafo" entre a busca e a
+    travessia. Grava 'grafo_lookup_agg_ms' em `tempos`.
     """
     db = get_db()
 
-    # Instrumentação: mede o tempo de cada etapa (ver /ask). O search preenche
-    # 'embedding_query_ms' e 'vector_search_ms'; o bloco de grafo abaixo mede
-    # 'grafo_lookup_agg_ms'.
-    tempos: Dict[str, float] = {}
-    hits = vector_search.search(query, k=k, tempos=tempos)
-
     t_grafo0 = time.perf_counter()
 
+    # Dedup dos hits preservando a ordem (evita repetir a mesma entidade).
+    unique_hits: List[Dict[str, Any]] = []
+    vistos: set = set()
+    for h in hits:
+        chave = (h["entity_type"], h["entity_id"])
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        unique_hits.append(h)
+
+    # --- Fan-out: as chamadas independentes de cada hit rodam EM PARALELO ----
+    # Antes, para cada hit rodávamos detalhe + impacto + subgrafo em sequência,
+    # e um hit só começava depois do outro. Como tudo isso é I/O de rede ao
+    # Atlas, threads dão paralelismo real (o pymongo é thread-safe; a chamada
+    # get_db() acima já criou o client único antes do fan-out). A MONTAGEM
+    # depois é sequencial e determinística — a saída fica idêntica à de antes.
+    detalhes: Dict[int, Tuple] = {}          # i -> (fornecedor, custo, moeda)
+    impactos: Dict[int, Any] = {}            # i -> license_impact(...)
+    subs: Dict[int, Dict[str, Any]] = {}     # i -> subgrafo da entidade
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futuros = {}
+        for i, h in enumerate(unique_hits):
+            eid = h["entity_id"]
+            if h["entity_type"] == "license":
+                futuros[ex.submit(_licenca_detalhe, db, eid)] = (i, "detalhe")
+                futuros[ex.submit(queries.license_impact, eid)] = (i, "impacto")
+                futuros[ex.submit(subgraph.subgraph_for_license, db, eid)] = (i, "sub")
+            elif h["entity_type"] == "vendor":
+                futuros[ex.submit(subgraph.subgraph_for_vendor, db, eid)] = (i, "sub")
+        for fut, (i, kind) in futuros.items():
+            res = fut.result()  # re-lança exceção do worker, se houver
+            if kind == "detalhe":
+                detalhes[i] = res
+            elif kind == "impacto":
+                impactos[i] = res
+            else:
+                subs[i] = res
+
+    # --- Montagem determinística (na ordem dos hits) ------------------------
     fatos: List[Dict[str, Any]] = []
     fornecedores: set = set()   # fornecedores p/ o consolidado de gasto
-    vistos: set = set()         # evita repetir a mesma entidade
     subgrafos: List[Dict[str, Any]] = []  # mini-grafo de cada entidade usada
 
     # Consultas MongoDB que DE FATO rodaram, para o painel "Ver a consulta".
@@ -83,14 +141,9 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
         consulta_vetor["resultado"] = f"Resolveu para: {resolvido}"
     consultas: List[Dict[str, str]] = [consulta_vetor]
 
-    for h in hits:
-        chave = (h["entity_type"], h["entity_id"])
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-
+    for i, h in enumerate(unique_hits):
         if h["entity_type"] == "license":
-            fornecedor, custo, moeda = _licenca_detalhe(db, h["entity_id"])
+            fornecedor, custo, moeda = detalhes[i]
             if fornecedor:
                 fornecedores.add(fornecedor)
             fatos.append({
@@ -101,10 +154,10 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
                 "custo_unitario": custo,
                 "moeda": moeda,
                 # impacto já traz validade, projetos, times, centros e servidores
-                "impacto": queries.license_impact(h["entity_id"]),
+                "impacto": impactos[i],
             })
-            subgrafos.append(subgraph.subgraph_for_license(db, h["entity_id"]))
-            trav = queries.consulta_travessia(h["entity_id"])
+            subgrafos.append(subs[i])
+            trav = queries.consulta_travessia(h["entity_id"])  # só formata string
             if trav:
                 consultas.append({
                     "titulo": f"2) Travessia $lookup encadeada — licença {h['name']}",
@@ -114,22 +167,24 @@ def build_context(query: str, k: int = 3) -> Dict[str, Any]:
             fornecedores.add(h["name"])
             fatos.append({"tipo": "fornecedor", "nome": h["name"],
                           "entity_id": h["entity_id"]})
-            subgrafos.append(subgraph.subgraph_for_vendor(db, h["entity_id"]))
+            subgrafos.append(subs[i])
         else:
             fatos.append({"tipo": h["entity_type"], "nome": h["name"],
                           "entity_id": h["entity_id"]})
 
     # Consolidado de gasto por centro de custo, para cada fornecedor envolvido.
+    # As agregações por fornecedor são independentes -> também em paralelo.
+    # ex.map preserva a ordem de `fornecedores_ord` (saída determinística).
+    fornecedores_ord = sorted(fornecedores)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        gastos_calc = list(ex.map(costs.cost_by_cost_center, fornecedores_ord))
     gastos_por_fornecedor = [
-        {
-            "fornecedor": nome,
-            "gasto_por_centro_de_custo": costs.cost_by_cost_center(nome),
-        }
-        for nome in sorted(fornecedores)
+        {"fornecedor": nome, "gasto_por_centro_de_custo": gasto}
+        for nome, gasto in zip(fornecedores_ord, gastos_calc)
     ]
 
     # A agregação de custo (unit_cost x quantity) também rodou de verdade.
-    for nome in sorted(fornecedores):
+    for nome in fornecedores_ord:
         consultas.append({
             "titulo": f"3) Agregação de custo por centro — fornecedor {nome}",
             "consulta": costs.consulta_por_centro(nome),

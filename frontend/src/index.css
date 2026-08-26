@@ -276,6 +276,88 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
+ * Progresso das etapas (streaming) + cursor da resposta
+ * Sem cores fixas: tudo via tema (var(--color-*)).
+ * ------------------------------------------------------------------------- */
+.etapas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.etapa {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--color-text-muted); /* pendente */
+}
+.etapa-bolinha {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-border);
+  flex-shrink: 0;
+}
+.etapa-trilho {
+  width: 24px;
+  height: 2px;
+  background: var(--color-border);
+}
+/* Etapa concluída: bolinha na cor primária, texto normal. */
+.etapa-feita {
+  color: var(--color-text);
+}
+.etapa-feita .etapa-bolinha {
+  background: var(--color-primary);
+}
+/* Etapa em andamento: destaque + bolinha pulsando. */
+.etapa-ativa {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.etapa-ativa .etapa-bolinha {
+  background: var(--color-primary);
+  animation: etapa-pulso 1s ease-in-out infinite;
+}
+@keyframes etapa-pulso {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+.etapa-resolvido {
+  margin: 10px 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* Cursor piscando ao fim do texto enquanto o Claude ainda escreve. */
+.stream-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--color-primary);
+  animation: cursor-pisca 1s step-end infinite;
+}
+@keyframes cursor-pisca {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * Grafo (react-force-graph)
  * ------------------------------------------------------------------------- */
 .graph-wrap {

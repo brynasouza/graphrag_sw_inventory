@@ -5,10 +5,18 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-export function Answer({ texto }: { texto: string }) {
+export function Answer({
+  texto,
+  streaming = false,
+}: {
+  texto: string;
+  streaming?: boolean;
+}) {
   return (
     <div className="card answer">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{texto}</ReactMarkdown>
+      {/* Cursor piscando enquanto o texto ainda está chegando (streaming). */}
+      {streaming && <span className="stream-cursor" aria-hidden="true" />}
     </div>
   );
 }

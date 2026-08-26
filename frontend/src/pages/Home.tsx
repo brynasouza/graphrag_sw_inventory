@@ -5,9 +5,10 @@
  */
 import { useState } from "react";
 
-import { AskResponse, ask } from "../api";
+import { AskContext, Etapa, askStream } from "../api";
 import { Answer } from "../components/Answer";
 import { AskForm } from "../components/AskForm";
+import { Etapas } from "../components/Etapas";
 import { Facts } from "../components/Facts";
 import { GraphView } from "../components/GraphView";
 import { VerConsulta } from "../components/VerConsulta";
@@ -15,23 +16,34 @@ import { VerConsulta } from "../components/VerConsulta";
 export function Home() {
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
-  const [resposta, setResposta] = useState<AskResponse | null>(null);
+  // Estados do streaming: a etapa atual, o texto que cresce e o contexto (que
+  // chega ANTES do texto terminar, permitindo revelar o grafo/consulta já).
+  const [etapa, setEtapa] = useState<Etapa | null>(null);
+  const [texto, setTexto] = useState("");
+  const [contexto, setContexto] = useState<AskContext | null>(null);
 
   async function handleAsk(pergunta: string) {
     setLoading(true);
     setErro(null);
-    setResposta(null);
+    setEtapa(null);
+    setTexto("");
+    setContexto(null);
     try {
-      const r = await ask(pergunta);
-      setResposta(r);
+      await askStream(pergunta, {
+        onEtapa: (e) => setEtapa(e),
+        onContexto: (ctx) => setContexto(ctx),
+        onToken: (chunk) => setTexto((anterior) => anterior + chunk),
+        onErro: (detalhe) => setErro(detalhe),
+      });
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Falha ao consultar a API.");
     } finally {
       setLoading(false);
+      setEtapa(null);
     }
   }
 
-  const subgrafo = resposta?.context.subgrafo;
+  const subgrafo = contexto?.subgrafo;
 
   return (
     <div className="container">
@@ -42,6 +54,11 @@ export function Home() {
 
       <AskForm onAsk={handleAsk} loading={loading} />
 
+      {/* Progresso das etapas enquanto o Claude ainda não terminou de escrever. */}
+      {loading && etapa && (
+        <Etapas atual={etapa.etapa} resolvido={etapa.resolvido} />
+      )}
+
       {erro && (
         <div className="card error">
           <strong>Não foi possível responder.</strong>
@@ -49,10 +66,12 @@ export function Home() {
         </div>
       )}
 
-      {resposta && (
-        <>
-          <Answer texto={resposta.answer} />
+      {/* Texto em streaming (com cursor enquanto carrega). */}
+      {texto && <Answer texto={texto} streaming={loading} />}
 
+      {/* Contexto chega antes do fim do texto -> grafo e consulta já aparecem. */}
+      {contexto && (
+        <>
           {subgrafo && subgrafo.nodes.length > 0 && (
             <div className="card">
               <p className="mini-graph-title">
@@ -62,9 +81,9 @@ export function Home() {
             </div>
           )}
 
-          <VerConsulta consultas={resposta.context.consultas} />
+          <VerConsulta consultas={contexto.consultas} />
 
-          <Facts context={resposta.context} />
+          <Facts context={contexto} />
         </>
       )}
     </div>

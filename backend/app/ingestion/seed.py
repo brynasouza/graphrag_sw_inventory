@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 
 from app.core.db import get_db
+from app.core.indexes import ensure_indexes
 from app.models.schemas import Collections as C
 
 
@@ -219,6 +220,9 @@ def seed():
             "cpu_sockets": sockets,
             "project_id": projects[proj],
         })
+
+    # 11) Índices das FKs (para as junções não varrerem tudo) -----------
+    ensure_indexes(db)
 
     # Resumo -------------------------------------------------------------
     print("Seed concluído. Documentos por coleção:")

@@ -14,7 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.ask_routes import router as ask_router
 from app.api.graph_routes import router as graph_router
 from app.api.search_routes import router as search_router
-from app.core.db import ping
+from app.core.db import get_db, ping
+from app.core.indexes import ensure_indexes
 
 app = FastAPI(
     title="MVP GraphRAG — Inventário de Software",
@@ -30,6 +31,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _garantir_indices():
+    """
+    Garante os índices das FKs no startup (idempotente). Protegido: se o Atlas
+    estiver fora no momento do boot, a app sobe mesmo assim — o erro real
+    aparece de forma amigável no /health, não como crash na inicialização.
+    """
+    try:
+        ensure_indexes(get_db())
+    except Exception as exc:  # noqa: BLE001 - não derruba a app por causa de índice
+        print(f"[startup] não foi possível garantir índices agora: {exc}")
 
 
 @app.get("/health")
