@@ -182,6 +182,13 @@ npm run dev
 | GET | `/graph/costs/by-vendor` | Gasto por fornecedor |
 | GET | `/search?q=...` | Busca vetorial (texto → entidade) |
 | POST | `/ask` | **GraphRAG completo** (pergunta → resposta) |
+| POST | `/ask/stream` | Igual ao `/ask`, mas em **streaming (SSE)**: emite as etapas e o texto do Claude em tempo real |
+
+> O `/ask/stream` responde em **Server-Sent Events**: eventos `etapa`
+> (progresso: buscando → percorrendo → redigindo), `contexto` (os fatos e os
+> comandos MongoDB, que chegam antes do texto), `token` (a resposta palavra a
+> palavra) e `fim`. É o que a tela "Perguntar" consome para mostrar o sistema
+> trabalhando. (O evento `erro` de encerramento está descrito em _Resiliência_.)
 
 > Os GETs de grafo/custo aceitam `?incluir_consulta=true`: a resposta passa a
 > ser `{ dados, consulta }`, onde `consulta` é o comando MongoDB real por trás
@@ -195,6 +202,36 @@ curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Quanto gastamos com a VMware por centro de custo?"}'
 ```
+
+## Cache das perguntas da demo
+
+As perguntas fixas usadas na demonstração se repetem. Para deixá-las quase
+instantâneas — e independentes do limite de requisições da Voyage — o
+_retrieval_ inteiro (busca vetorial + travessia do grafo) dessas perguntas é
+guardado em um cache em memória (whitelist: só elas entram). Em um acerto, sobra
+apenas a geração do Claude; os comandos MongoDB das **duas fases** continuam no
+painel "Ver a consulta", idênticos a uma execução normal.
+
+> **Invalidação por token do seed.** Ao rodar, o `seed.py` grava um token de
+> versão em `app_meta` (`{_id: "seed", ran_at}`). Cada consulta confere esse
+> token com um `find_one` por `_id` (a operação mais barata do Atlas), no máximo
+> uma vez a cada poucos segundos. Se o token mudou (o seed rodou de novo), o
+> cache é descartado — os dados podem ter mudado.
+
+## Resiliência
+
+Falhas externas viram mensagem clara na tela, nunca tela branca ou travamento:
+
+- **Timeout curto de conexão.** O cliente MongoDB usa `serverSelectionTimeoutMS`
+  de 5s — se o Atlas estiver fora do ar, o erro aparece em segundos, em vez de
+  esperar o padrão de 30s do driver.
+- **Classificação de erro no backend.** Um único ponto traduz cada falha em uma
+  mensagem específica: Voyage em limite de requisições, serviço de IA
+  indisponível (chaves), índice de busca ausente e Atlas indisponível. O `/ask`
+  responde `503` com essa mensagem.
+- **Erro no streaming.** O `/ask/stream` **sempre** encerra com um evento `erro`
+  quando algo falha — inclusive se o Claude cair no meio da redação: os tokens já
+  enviados permanecem na tela e a mensagem explica a parada, sem corte silencioso.
 
 ## Testes
 
