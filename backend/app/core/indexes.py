@@ -21,8 +21,9 @@ from pymongo.database import Database
 
 from app.models.schemas import Collections as C
 
-# (coleção, campo) — todos os FKs reversos usados nas travessias e agregações.
-# Inclui license_id / project_id / team_id / cost_center_id explicitamente.
+# (coleção, campo) — FKs reversos usados nas travessias/agregações e os campos
+# filtrados/ordenados nas telas. Inclui license_id / project_id / team_id /
+# cost_center_id (junções) e expires_at (filtro+ordenação da tela de alertas).
 _INDICES: List[Tuple[str, str]] = [
     (C.ALLOCATIONS, "license_id"),   # travessia licença->alocações; subgrafo
     (C.ALLOCATIONS, "project_id"),   # custo por centro; subgrafo
@@ -32,6 +33,7 @@ _INDICES: List[Tuple[str, str]] = [
     (C.PRODUCTS, "vendor_id"),       # produtos de um fornecedor
     (C.LICENSES, "product_id"),      # licenças de um produto
     (C.LICENSES, "contract_id"),     # licença->contrato (subgrafo)
+    (C.LICENSES, "expires_at"),      # tela de alertas filtra e ordena por expiração
     (C.CONTRACTS, "vendor_id"),      # contratos de um fornecedor
 ]
 

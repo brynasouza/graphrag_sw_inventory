@@ -76,12 +76,16 @@ def consulta_licencas(expiring_in_days: Optional[int] = None) -> str:
 # Reaproveitado pelas consultas de "projetos que usam X" e "impacto se X vencer"
 # ---------------------------------------------------------------------------
 def _traversal_stages() -> List[Dict[str, Any]]:
+    # Cada $lookup mantém localField/foreignField (join indexado — IXSCAN) e traz
+    # só os campos usados a jusante via sub-pipeline $project, em vez do documento
+    # inteiro. Forma combinada do MongoDB 5.0+ (igualdade indexada + projeção).
     return [
         # Salto 1: licença -> alocações desta licença
         {"$lookup": {
             "from": C.ALLOCATIONS,
             "localField": "_id",
             "foreignField": "license_id",
+            "pipeline": [{"$project": {"project_id": 1, "quantity": 1, "_id": 0}}],
             "as": "alloc",
         }},
         {"$unwind": "$alloc"},
@@ -90,6 +94,7 @@ def _traversal_stages() -> List[Dict[str, Any]]:
             "from": C.PROJECTS,
             "localField": "alloc.project_id",
             "foreignField": "_id",
+            "pipeline": [{"$project": {"name": 1, "team_id": 1, "_id": 0}}],
             "as": "project",
         }},
         {"$unwind": "$project"},
@@ -98,6 +103,7 @@ def _traversal_stages() -> List[Dict[str, Any]]:
             "from": C.TEAMS,
             "localField": "project.team_id",
             "foreignField": "_id",
+            "pipeline": [{"$project": {"name": 1, "cost_center_id": 1, "_id": 0}}],
             "as": "team",
         }},
         {"$unwind": "$team"},
@@ -106,6 +112,7 @@ def _traversal_stages() -> List[Dict[str, Any]]:
             "from": C.COST_CENTERS,
             "localField": "team.cost_center_id",
             "foreignField": "_id",
+            "pipeline": [{"$project": {"code": 1, "_id": 0}}],
             "as": "cost_center",
         }},
         {"$unwind": "$cost_center"},

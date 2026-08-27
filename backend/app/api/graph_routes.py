@@ -85,20 +85,27 @@ def get_cost_by_vendor(incluir_consulta: bool = Query(False)):
 # Visualização de grafo (nós + arestas) para o frontend
 # ---------------------------------------------------------------------------
 @router.get("/explore")
-def get_full_graph(incluir_consulta: bool = Query(False)):
+def get_full_graph(
+    incluir_consulta: bool = Query(False),
+    limite: Optional[int] = Query(None, gt=0),
+):
     """
     Grafo inteiro do inventário como {nodes, edges}, para a página
     'Explorar Grafo'. Nós coloridos por tipo; allocations viram arestas
     licença → projeto (com a quantidade no rótulo).
 
+    ?limite=N lê no máximo N documentos por coleção (default: 200) — protege
+    contra dataset grande sem afetar a demo; a resposta traz `truncado=true`
+    quando algum corte ocorreu.
+
     Com ?incluir_consulta=true, devolve {dados, consulta} — a `consulta` são os
-    find() reais que montam o grafo (esta tela não usa $lookup). Sem o
-    parâmetro, a resposta é idêntica à de sempre.
+    find() reais (com o mesmo `.limit()`) que montam o grafo. Sem o parâmetro, a
+    resposta é idêntica à de sempre.
     """
     try:
-        dados = explore.full_graph(get_db())
+        dados = explore.full_graph(get_db(), limite)
         if incluir_consulta:
-            return {"dados": dados, "consulta": explore.consulta_do_grafo()}
+            return {"dados": dados, "consulta": explore.consulta_do_grafo(limite)}
         return dados
     except PyMongoError as exc:
         raise HTTPException(

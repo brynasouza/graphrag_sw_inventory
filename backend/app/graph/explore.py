@@ -6,7 +6,7 @@ Lê as 9 coleções de domínio e monta {nodes, edges} no formato canônico
 cada documento. `allocations` vira aresta licença → projeto (com a
 quantidade no rótulo), não um nó.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.graph import graphdata as G
 from app.graph import mongosh
@@ -19,27 +19,52 @@ _COLECOES_DO_GRAFO = [
     C.PROJECTS, C.TEAMS, C.COST_CENTERS, C.SERVERS,
 ]
 
+# Teto de documentos lidos POR coleção. A demo tem ~60 nós no total (cada
+# coleção bem abaixo disto), então o default NÃO altera o que se vê hoje — ele
+# só evita que um dataset muito maior trave o navegador ao carregar o grafo
+# inteiro. Não é paginação: paginar um grafo quebraria arestas. Arestas que
+# sobrarem sem um dos extremos (por causa do corte) já são descartadas pelo
+# GraphBuilder.result(), então o grafo continua íntegro.
+LIMITE_POR_COLECAO = 200
 
-def consulta_do_grafo() -> str:
+
+def consulta_do_grafo(limite: Optional[int] = None) -> str:
     """
     String mongosh com os find() que montam o grafo.
     A tela "Explorar Grafo" NÃO usa $lookup: lê as 9 coleções e monta os
-    nós/arestas em Python. Então o comando honesto a mostrar são estes find().
+    nós/arestas em Python. Então o comando honesto a mostrar são estes find()
+    — com o mesmo `.limit()` que a execução aplica.
     """
-    return mongosh.formatar_finds(_COLECOES_DO_GRAFO)
+    if limite is None:
+        limite = LIMITE_POR_COLECAO
+    return mongosh.formatar_finds(_COLECOES_DO_GRAFO, limite)
 
 
-def full_graph(db) -> Dict[str, List[Dict[str, Any]]]:
-    """Devolve o grafo completo do inventário como {nodes, edges}."""
-    vendors = list(db[C.VENDORS].find())
-    products = list(db[C.PRODUCTS].find())
-    contracts = list(db[C.CONTRACTS].find())
-    licenses = list(db[C.LICENSES].find())
-    allocations = list(db[C.ALLOCATIONS].find())
-    projects = list(db[C.PROJECTS].find())
-    teams = list(db[C.TEAMS].find())
-    cost_centers = list(db[C.COST_CENTERS].find())
-    servers = list(db[C.SERVERS].find())
+def full_graph(db, limite: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Devolve o grafo completo do inventário como {nodes, edges}.
+
+    Cada coleção é lida com `.limit(limite)` (default LIMITE_POR_COLECAO). Se
+    alguma coleção bateu no teto, o grafo pode estar parcial: sinalizamos isso
+    em `truncado` para não passar por completo um grafo cortado.
+    """
+    if limite is None:
+        limite = LIMITE_POR_COLECAO
+
+    vendors = list(db[C.VENDORS].find().limit(limite))
+    products = list(db[C.PRODUCTS].find().limit(limite))
+    contracts = list(db[C.CONTRACTS].find().limit(limite))
+    licenses = list(db[C.LICENSES].find().limit(limite))
+    allocations = list(db[C.ALLOCATIONS].find().limit(limite))
+    projects = list(db[C.PROJECTS].find().limit(limite))
+    teams = list(db[C.TEAMS].find().limit(limite))
+    cost_centers = list(db[C.COST_CENTERS].find().limit(limite))
+    servers = list(db[C.SERVERS].find().limit(limite))
+
+    # Bateu no teto em alguma coleção -> pode haver mais dados não carregados.
+    truncado = any(len(docs) == limite for docs in (
+        vendors, products, contracts, licenses, allocations,
+        projects, teams, cost_centers, servers))
 
     b = G.GraphBuilder()
 
@@ -79,4 +104,4 @@ def full_graph(db) -> Dict[str, List[Dict[str, Any]]]:
     for s in servers:
         b.add_edge(s["_id"], s.get("project_id"), G.REL_PROJETO)
 
-    return b.result()
+    return {**b.result(), "truncado": truncado, "limite": limite}

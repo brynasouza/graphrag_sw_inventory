@@ -14,11 +14,17 @@ from app.graph import mongosh
 from app.models.schemas import Collections as C
 
 # Estágios comuns: allocations -> licença (traz unit_cost) e o "gasto" de cada linha
+#
+# Cada $lookup mantém localField/foreignField (o join usa o índice — IXSCAN) e
+# adiciona um sub-pipeline só com $project: assim traz APENAS os campos usados
+# a jusante, não o documento inteiro. É a forma combinada do MongoDB 5.0+
+# (igualdade indexada + projeção), que enxuga o payload de cada junção.
 _LICENSE_JOIN = [
     {"$lookup": {
         "from": C.LICENSES,
         "localField": "license_id",
         "foreignField": "_id",
+        "pipeline": [{"$project": {"unit_cost": 1, "currency": 1, "product_id": 1, "_id": 0}}],
         "as": "lic",
     }},
     {"$unwind": "$lic"},
@@ -42,10 +48,14 @@ def _pipeline_por_centro(vendor: Optional[str] = None) -> List[Dict[str, Any]]:
     if vendor:
         pipeline += [
             {"$lookup": {"from": C.PRODUCTS, "localField": "lic.product_id",
-                         "foreignField": "_id", "as": "product"}},
+                         "foreignField": "_id",
+                         "pipeline": [{"$project": {"vendor_id": 1, "_id": 0}}],
+                         "as": "product"}},
             {"$unwind": "$product"},
             {"$lookup": {"from": C.VENDORS, "localField": "product.vendor_id",
-                         "foreignField": "_id", "as": "vendor"}},
+                         "foreignField": "_id",
+                         "pipeline": [{"$project": {"name": 1, "_id": 0}}],
+                         "as": "vendor"}},
             {"$unwind": "$vendor"},
             {"$match": {"vendor.name": vendor}},
         ]
@@ -53,13 +63,19 @@ def _pipeline_por_centro(vendor: Optional[str] = None) -> List[Dict[str, Any]]:
     # allocation -> projeto -> time -> centro de custo
     pipeline += [
         {"$lookup": {"from": C.PROJECTS, "localField": "project_id",
-                     "foreignField": "_id", "as": "project"}},
+                     "foreignField": "_id",
+                     "pipeline": [{"$project": {"team_id": 1, "_id": 0}}],
+                     "as": "project"}},
         {"$unwind": "$project"},
         {"$lookup": {"from": C.TEAMS, "localField": "project.team_id",
-                     "foreignField": "_id", "as": "team"}},
+                     "foreignField": "_id",
+                     "pipeline": [{"$project": {"cost_center_id": 1, "_id": 0}}],
+                     "as": "team"}},
         {"$unwind": "$team"},
         {"$lookup": {"from": C.COST_CENTERS, "localField": "team.cost_center_id",
-                     "foreignField": "_id", "as": "cc"}},
+                     "foreignField": "_id",
+                     "pipeline": [{"$project": {"code": 1, "name": 1, "_id": 0}}],
+                     "as": "cc"}},
         {"$unwind": "$cc"},
         # A MOEDA entra na CHAVE do grupo, não num $first. Assim, gastos em
         # moedas diferentes NUNCA são somados sob o mesmo total: cada
@@ -85,10 +101,14 @@ def _pipeline_por_fornecedor() -> List[Dict[str, Any]]:
     """Pipeline do gasto por fornecedor (allocations -> licença -> produto -> fornecedor)."""
     return list(_LICENSE_JOIN) + [
         {"$lookup": {"from": C.PRODUCTS, "localField": "lic.product_id",
-                     "foreignField": "_id", "as": "product"}},
+                     "foreignField": "_id",
+                     "pipeline": [{"$project": {"vendor_id": 1, "_id": 0}}],
+                     "as": "product"}},
         {"$unwind": "$product"},
         {"$lookup": {"from": C.VENDORS, "localField": "product.vendor_id",
-                     "foreignField": "_id", "as": "vendor"}},
+                     "foreignField": "_id",
+                     "pipeline": [{"$project": {"name": 1, "_id": 0}}],
+                     "as": "vendor"}},
         {"$unwind": "$vendor"},
         # Moeda na CHAVE do grupo (ver justificativa em _pipeline_por_centro):
         # gastos em moedas diferentes nunca colapsam num único total.
