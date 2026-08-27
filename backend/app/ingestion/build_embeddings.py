@@ -33,6 +33,9 @@ from app.retrieval import embeddings
 # isso, "plataforma de contêineres" e "colaboração/documentação" resolviam por
 # margem frágil (medido: OpenShift/Red Hat contaminava com VMware no k=3;
 # Confluence/Jira ficavam a ~0,004 de um banco de dados irrelevante).
+# Microsoft 365 entrou depois: consultas genéricas por função ("planilhas e
+# edição de documentos") eram capturadas pela âncora de "documentação" do
+# Confluence/Jira e o Microsoft 365 — sem âncora nenhuma — nem aparecia no k=3.
 # vSphere/vCenter (virtualização) NÃO entram: já resolvem com folga sozinhos —
 # enriquecer o que já funciona só adiciona ruído. O conceito passa a existir no
 # TEXTO indexado (fonte do embedding), nunca nos campos de negócio: um find()
@@ -41,6 +44,7 @@ _DESCRICAO_FUNCIONAL = {
     "OpenShift": "plataforma de contêineres e orquestração Kubernetes",
     "Confluence": "colaboração, wiki e documentação de equipes",
     "Jira": "colaboração, gestão de projetos e acompanhamento de tarefas",
+    "Microsoft 365": "e-mail, planilhas, edição de documentos, apresentações e pacote de escritório",
 }
 
 
@@ -83,7 +87,7 @@ def _vendor_docs(db) -> List[Dict[str, Any]]:
         nomes = produtos_por_fornecedor.get(v["_id"], [])
         prods = ", ".join(nomes) or "sem produtos"
         texto = f"Fornecedor {v['name']}. Produtos: {prods}."
-        # Herda a âncora funcional dos produtos que a têm (só Red Hat e Atlassian).
+        # Herda a âncora funcional dos produtos que a têm (Red Hat, Atlassian e Microsoft).
         categorias = [_DESCRICAO_FUNCIONAL[n] for n in nomes if n in _DESCRICAO_FUNCIONAL]
         if categorias:
             texto += f" Atua em: {'; '.join(categorias)}."

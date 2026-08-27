@@ -131,9 +131,12 @@ O seed **não** toca em `search_index`; quem a reconstrói é o
 ou seus textos mudarem, não a cada seed.
 
 O texto que o `build_embeddings.py` vetoriza inclui uma **âncora funcional
-cirúrgica** (`_DESCRICAO_FUNCIONAL`) só em OpenShift, Confluence e Jira — para
-que perguntas semânticas como "plataforma de contêineres" e "colaboração e
-documentação" resolvam com margem folgada. VMware/vSphere **não** entram: a
+cirúrgica** (`_DESCRICAO_FUNCIONAL`) só em OpenShift, Confluence, Jira e
+Microsoft 365 — para que perguntas semânticas como "plataforma de contêineres",
+"colaboração e documentação" e "planilhas e edição de documentos" resolvam com
+margem folgada. (O Microsoft 365 entrou depois: sem âncora, consultas genéricas
+por "documentos/planilhas" eram capturadas pela âncora de documentação do
+Confluence/Jira e ele nem aparecia no top-k.) VMware/vSphere **não** entram: a
 virtualização já resolve sozinha (enriquecer o que funciona só adiciona ruído).
 O conceito vive apenas no texto indexado (fonte do embedding), **nunca** nos
 campos de negócio — um `find()` por palavra-chave continua não achando, e é
