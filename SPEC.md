@@ -97,7 +97,45 @@ vs. sockets licenciados) fica de fora.
 **`search_index` é coleção separada, não vetor dentro de `licenses`.**
 Mantém os documentos de negócio limpos, permite indexar tipos diferentes (licenças *e*
 fornecedores) num só índice, e o índice pode ser reconstruído a qualquer momento sem tocar
-nos dados.
+nos dados. A reconstrução é **incremental** (`build_embeddings.py`): só re-embedda o texto
+que mudou, reaproveita o resto e remove órfãos — rodar de novo sem mudança não gasta cota
+da Voyage.
+
+### Métricas de licenciamento (`licenses.metric`)
+
+Cada licença declara **como é cobrada**:
+
+| Métrica | Significado |
+|---|---|
+| `per_cpu` | licenciada por CPU/soquete (ex.: virtualização por host) |
+| `per_host` | licenciada por servidor/host |
+| `per_user` | licenciada por usuário nomeado |
+
+Hoje `metric` é **descritiva**: o custo é sempre `unit_cost × allocations.quantity`,
+**independente da métrica**. A `quantity` da alocação já carrega o número contratado
+(CPUs, hosts ou usuários), então a conta fecha sem multiplicar pela métrica.
+
+**Por que `cpu_sockets` (de `servers`) não entra no cálculo `per_cpu`.** Seria natural
+querer "sockets consumidos vs. sockets licenciados", mas o modelo atual **não fecha** essa
+conta: `servers` conhece o `project_id`, não a `license_id`. Como um projeto tem várias
+licenças e vários servidores, somar os `cpu_sockets` de um projeto **não** atribui consumo
+a uma licença específica. Fechar isso exige um vínculo `servers → licenses` — registrado
+como fora de escopo na seção 8. Enquanto ele não existe, o sistema **não** insinua esse
+número: a resposta honesta é dizer que o dado não existe, não estimá-lo.
+
+### Fronteira ObjectId × string
+
+Dentro do MongoDB (e dos pipelines de agregação), `_id` e todas as chaves estrangeiras são
+**ObjectId**. Na borda HTTP/JSON, viram **string**. A conversão acontece em um ponto de
+cada lado — nunca espalhada pelo código:
+
+- **entrada** (str → ObjectId): `to_object_id()` em `app/graph/queries.py`;
+- **saída** (ObjectId → str): `_clean()` (queries.py), `$toString` nos `$project` e
+  `str(_id)` no `GraphBuilder` (`app/graph/graphdata.py`).
+
+Os modelos Pydantic (`app/models/schemas.py`) tipam as FKs como `str` porque documentam a
+forma **exposta na API**. No banco elas são ObjectId; inserir uma FK como string crua
+quebraria os `$lookup` (que casam ObjectId com ObjectId).
 
 ---
 

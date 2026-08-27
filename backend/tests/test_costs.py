@@ -5,6 +5,27 @@ Confere a soma do MongoDB contra um cálculo independente feito em Python
 a partir dos documentos crus — se os dois baterem, a agregação está certa.
 """
 from app.core.db import get_db
+from app.graph.costs import _pipeline_por_centro, _pipeline_por_fornecedor
+
+
+def _group_stage(pipeline):
+    """Devolve o corpo do estágio $group do pipeline."""
+    return next(s["$group"] for s in pipeline if "$group" in s)
+
+
+# --- Ponto 1: moeda NUNCA colapsa num único total ---------------------------
+# Não tocam no banco: inspecionam o pipeline montado. Travam a regressão para
+# `$first` sobre a moeda (que somaria BRL+USD silenciosamente sob uma só moeda).
+def test_por_centro_agrupa_por_moeda():
+    grupo = _group_stage(_pipeline_por_centro())
+    assert grupo["_id"].get("currency") == "$lic.currency"  # moeda está na CHAVE
+    assert set(grupo) == {"_id", "total"}                   # nenhum acumulador de moeda
+
+
+def test_por_fornecedor_agrupa_por_moeda():
+    grupo = _group_stage(_pipeline_por_fornecedor())
+    assert grupo["_id"].get("currency") == "$lic.currency"
+    assert set(grupo) == {"_id", "total"}
 
 
 def _expected_totals():

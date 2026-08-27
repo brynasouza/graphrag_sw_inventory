@@ -28,6 +28,7 @@ from bson import ObjectId
 
 from app.core.db import get_db
 from app.core.indexes import ensure_indexes
+from app.graph.validation import check_integrity
 from app.models.schemas import Collections as C
 
 
@@ -242,6 +243,17 @@ def seed():
 
     venc90 = db[C.LICENSES].count_documents({"expires_at": {"$lte": dias(90)}})
     print(f"\nLicenças vencendo nos próximos 90 dias: {venc90}")
+
+    # Rede de segurança: confere integridade (negativos + referências órfãs).
+    # Não é fatal — o seed já rodou; só AVISA se algo saiu torto, para pegar
+    # cedo um erro introduzido numa futura mudança dos dados.
+    problemas = check_integrity(db)
+    if problemas:
+        print(f"\n⚠️  {len(problemas)} problema(s) de integridade encontrado(s):")
+        for p in problemas:
+            print(f"  - {p}")
+    else:
+        print("Integridade: OK (nenhum negativo, nenhuma referência órfã).")
 
 
 if __name__ == "__main__":

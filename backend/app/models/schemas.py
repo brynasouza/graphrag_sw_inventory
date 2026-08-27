@@ -2,8 +2,17 @@
 Formato (schema) de cada coleção do MongoDB.
 
 Estes modelos Pydantic servem para DOCUMENTAR e VALIDAR a forma dos
-documentos. As referências entre coleções são guardadas como o _id
-do documento vizinho (aqui representado como texto/str na API).
+documentos.
+
+FRONTEIRA ObjectId x string. Dentro do Mongo (e dos pipelines de agregação)
+o `_id` e as chaves estrangeiras são ObjectId de verdade. Na borda HTTP/JSON
+eles viram string. As conversões acontecem em UM lugar cada:
+  - entrada  (str -> ObjectId): `to_object_id()` em `app/graph/queries.py`
+  - saída    (ObjectId -> str): `_clean()` (queries.py), `$toString` nos
+             `$project` e `str(_id)` no `GraphBuilder` (`graph/graphdata.py`)
+Por isso os campos de FK abaixo são tipados como `str`: é a forma exposta na
+API. NO BANCO eles são ObjectId — nunca insira uma FK como string crua, ou os
+`$lookup` (que casam ObjectId com ObjectId) param de encontrar o vizinho.
 
 Grafo de relacionamentos:
 
@@ -15,7 +24,7 @@ Grafo de relacionamentos:
                                           (servers aponta para projects)
 """
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -35,7 +44,7 @@ class Contract(BaseModel):
     """Contrato guarda-chuva com um fornecedor."""
     vendor_id: str          # -> vendors._id
     reference: str          # número/código do contrato
-    value: float            # valor total do contrato
+    value: float = Field(ge=0)   # valor total do contrato (nunca negativo)
     currency: str           # ex.: "BRL"
     starts_at: datetime
     ends_at: datetime
@@ -51,9 +60,11 @@ class License(BaseModel):
     product_id: str         # -> products._id
     contract_id: str        # -> contracts._id
     expires_at: datetime
-    unit_cost: float
+    unit_cost: float = Field(ge=0)   # custo unitário nunca é negativo
     currency: str           # ex.: "BRL"
-    metric: str             # como é licenciado: "per_cpu", "per_user", "per_host"
+    # Como a licença é cobrada. É DESCRITIVO: hoje o custo é sempre
+    # unit_cost x quantity, independente da métrica (ver SPEC.md secao 4).
+    metric: Literal["per_cpu", "per_host", "per_user"]
 
 
 class Allocation(BaseModel):
@@ -64,7 +75,7 @@ class Allocation(BaseModel):
     """
     license_id: str         # -> licenses._id
     project_id: str         # -> projects._id
-    quantity: int
+    quantity: int = Field(gt=0)   # alocar 0 (ou menos) unidades não é alocação
     allocated_at: datetime
 
 
@@ -92,7 +103,7 @@ class Server(BaseModel):
     como VMware são licenciados por host/CPU (cpu_sockets).
     """
     hostname: str
-    cpu_sockets: int
+    cpu_sockets: int = Field(gt=0)   # um servidor tem ao menos 1 soquete
     project_id: str         # -> projects._id
 
 
