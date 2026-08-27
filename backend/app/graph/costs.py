@@ -61,17 +61,20 @@ def _pipeline_por_centro(vendor: Optional[str] = None) -> List[Dict[str, Any]]:
         {"$lookup": {"from": C.COST_CENTERS, "localField": "team.cost_center_id",
                      "foreignField": "_id", "as": "cc"}},
         {"$unwind": "$cc"},
+        # A MOEDA entra na CHAVE do grupo, não num $first. Assim, gastos em
+        # moedas diferentes NUNCA são somados sob o mesmo total: cada
+        # (centro de custo, moeda) vira uma linha separada. Somar BRL+USD sem
+        # conversão e rotular com uma moeda só seria silenciosamente errado.
         {"$group": {
-            "_id": {"code": "$cc.code", "name": "$cc.name"},
+            "_id": {"code": "$cc.code", "name": "$cc.name", "currency": "$lic.currency"},
             "total": {"$sum": "$spend"},
-            "currency": {"$first": "$lic.currency"},
         }},
         {"$project": {
             "_id": 0,
             "cost_center": "$_id.code",
             "cost_center_name": "$_id.name",
+            "currency": "$_id.currency",
             "total": 1,
-            "currency": 1,
         }},
         {"$sort": {"total": -1}},
     ]
@@ -87,12 +90,13 @@ def _pipeline_por_fornecedor() -> List[Dict[str, Any]]:
         {"$lookup": {"from": C.VENDORS, "localField": "product.vendor_id",
                      "foreignField": "_id", "as": "vendor"}},
         {"$unwind": "$vendor"},
+        # Moeda na CHAVE do grupo (ver justificativa em _pipeline_por_centro):
+        # gastos em moedas diferentes nunca colapsam num único total.
         {"$group": {
-            "_id": "$vendor.name",
+            "_id": {"vendor": "$vendor.name", "currency": "$lic.currency"},
             "total": {"$sum": "$spend"},
-            "currency": {"$first": "$lic.currency"},
         }},
-        {"$project": {"_id": 0, "vendor": "$_id", "total": 1, "currency": 1}},
+        {"$project": {"_id": 0, "vendor": "$_id.vendor", "currency": "$_id.currency", "total": 1}},
         {"$sort": {"total": -1}},
     ]
 
