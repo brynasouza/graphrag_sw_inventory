@@ -30,6 +30,24 @@ def test_explore_retorna_grafo_integro(client):
     assert {"vendor", "license", "project", "cost_center"} <= tipos
 
 
+def test_explore_respeita_limite(client):
+    """
+    ?limite=N corta cada coleção em N documentos e sinaliza `truncado`.
+    Com o default (200 >> demo), nada é cortado (`truncado` False).
+    """
+    r = client.get("/graph/explore", params={"limite": 1})
+    if r.status_code == 503:
+        pytest.skip("Banco indisponível para montar o grafo")
+    data = r.json()
+    # 8 tipos de nó (allocations viram aresta), no máximo 1 doc por coleção.
+    assert len(data["nodes"]) <= 8
+    assert data["truncado"] is True
+
+    # Default: demo pequena cabe folgada -> nada truncado.
+    padrao = client.get("/graph/explore").json()
+    assert padrao["truncado"] is False
+
+
 def test_subgrafo_de_licenca(client):
     """O subgrafo de uma licença inclui a própria licença e é íntegro."""
     lics = client.get("/graph/licenses").json()

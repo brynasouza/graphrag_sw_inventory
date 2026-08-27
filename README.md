@@ -67,7 +67,9 @@ qualquer direção.
 | `servers` | `hostname`, `cpu_sockets`, `project_id` | Servidores (VMware é licenciado por host/CPU) |
 
 > **Custo real** = `licenses.unit_cost` × `allocations.quantity`, somado
-> por fornecedor ou centro de custo.
+> por fornecedor ou centro de custo. A soma é **agrupada por moeda**: cada
+> par (grupo, moeda) vira uma linha própria, então gastos em moedas diferentes
+> nunca colapsam num único total sem conversão.
 
 A coleção auxiliar `search_index` guarda o texto + embedding de cada
 entidade pesquisável (criada pelo script de embeddings).
@@ -132,6 +134,13 @@ python -m app.ingestion.seed
 > hoje (para "vencer em 90 dias" seguir verdadeiro) — fixe-as com a variável
 > `SEED_DATA_BASE=2026-01-01` se precisar de datas estáveis (ex.: em teste).
 
+> **Validação de integridade.** Ao final, o seed roda `check_integrity`, que
+> varre valores negativos (quantidade, custo, sockets) e **referências órfãs**
+> (uma FK que aponta para um `_id` inexistente) — imprime um aviso se achar
+> algo, sem derrubar o seed. Na entrada, os schemas Pydantic já barram o
+> inválido: `quantity`/`cpu_sockets > 0`, `unit_cost`/`value ≥ 0` e `metric`
+> restrita a `per_cpu | per_host | per_user`.
+
 ### 3. Índice de busca vetorial (uma vez)
 
 ```bash
@@ -147,6 +156,13 @@ Depois, no site do Atlas, crie um índice **Atlas Vector Search** chamado
 > estáveis, re-seedar mantém os `entity_id` válidos: só é preciso rodar o
 > `build_embeddings` de novo quando as **entidades ou seus textos mudarem**,
 > não a cada seed.
+
+> **Embeddings incrementais.** O `build_embeddings.py` é **incremental e
+> econômico**: compara o texto de cada entidade com o já indexado, só chama a
+> Voyage para o que é **novo ou mudou**, reaproveita os vetores inalterados e
+> remove órfãos. Uma 2ª rodada sem nenhuma mudança **não gasta cota** da Voyage.
+> Uma chave única `(entity_type, entity_id)` na `search_index` sustenta o upsert
+> e impede duplicatas (criada pelo próprio script, não precisa fazer no Atlas).
 
 > **Âncora semântica.** O texto vetorizado inclui uma descrição funcional em
 > alguns produtos (OpenShift → contêineres/Kubernetes; Confluence/Jira →
@@ -195,6 +211,13 @@ npm run dev
 > do resultado (pronto para colar no `mongosh`). É o que alimenta o painel
 > "Ver a consulta" no frontend. O `/ask` já traz esses comandos em
 > `context.consultas`. Sem o parâmetro, a resposta é idêntica à de sempre.
+
+> **Desempenho.** As junções `$lookup` de custo/travessia trazem só os campos
+> usados (sub-pipeline `$project`) e casam pela chave indexada. Há índice em
+> `licenses.expires_at` (a tela de alertas filtra e ordena por ele). O
+> `/graph/explore` lê no máximo `?limite=N` documentos por coleção (default
+> 200) e marca `truncado=true` se cortou — protege contra um inventário grande
+> sem alterar a demo (~60 nós).
 
 Exemplo:
 ```bash
@@ -248,6 +271,19 @@ Para adaptar o app a outra marca, edite **apenas um arquivo**:
 [`frontend/src/theme/theme.ts`](frontend/src/theme/theme.ts) — troque o
 nome, o `logo` e a paleta de `colors`. As cores viram variáveis CSS
 aplicadas em todo o app; nada mais precisa mudar.
+
+## Limitações conhecidas
+
+- **`per_cpu` não fecha "sockets consumidos vs. licenciados".** O campo
+  `licenses.metric` (`per_cpu | per_host | per_user`) é hoje **descritivo**: o
+  custo é sempre `unit_cost × quantity`, independente da métrica. Seria natural
+  cruzar `servers.cpu_sockets` com uma licença `per_cpu`, mas o modelo não
+  permite: `servers` conhece o `project_id`, **não** a `license_id`. Como um
+  projeto tem várias licenças e vários servidores, somar sockets por projeto não
+  atribui consumo a uma licença específica. Fechar isso exige um vínculo
+  `servers → licenses` — registrado como fora de escopo (SPEC §8). Enquanto não
+  existe, o sistema **não estima** esse número: a resposta honesta é dizer que o
+  dado não existe.
 
 ## Segurança
 
