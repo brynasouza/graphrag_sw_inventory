@@ -25,24 +25,33 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.db import get_db
 from app.graph import costs, graphdata, queries, subgraph
 from app.models.schemas import Collections as C
+from app.models.schemas import EdgeTypes as E
 from app.retrieval import demo_cache, vector_search
 
 
 def _licenca_detalhe(db, license_id: str) -> Tuple[Optional[str], Optional[float], Optional[str]]:
-    """Descobre (fornecedor, custo_unitario, moeda) de uma licença."""
+    """Descobre (fornecedor, custo_unitario, moeda) de uma licença no grafo."""
     oid = queries.to_object_id(license_id)
     if oid is None:
         return None, None, None
-    lic = db[C.LICENSES].find_one(
-        {"_id": oid}, {"product_id": 1, "unit_cost": 1, "currency": 1}
-    )
+    lic = db[C.GRAPH_NODES].find_one({"_id": oid, "tipo": "license"}, {"props": 1})
     if lic is None:
         return None, None, None
-    prod = db[C.PRODUCTS].find_one({"_id": lic["product_id"]}, {"vendor_id": 1})
-    vend = db[C.VENDORS].find_one(
-        {"_id": prod["vendor_id"]}, {"name": 1}) if prod else None
-    fornecedor = vend["name"] if vend else None
-    return fornecedor, lic.get("unit_cost"), lic.get("currency")
+    props = lic.get("props", {})
+
+    # Fornecedor: licença → produto → fornecedor (duas arestas do grafo).
+    fornecedor = None
+    e_prod = db[C.GRAPH_EDGES].find_one(
+        {"from": oid, "tipo": E.LICENCA_PRODUTO}, {"to": 1})
+    if e_prod:
+        e_vend = db[C.GRAPH_EDGES].find_one(
+            {"from": e_prod["to"], "tipo": E.PRODUTO_FORNECEDOR}, {"to": 1})
+        if e_vend:
+            vend = db[C.GRAPH_NODES].find_one(
+                {"_id": e_vend["to"], "tipo": "vendor"}, {"label": 1})
+            fornecedor = vend["label"] if vend else None
+
+    return fornecedor, props.get("unit_cost"), props.get("currency")
 
 
 def build_context(query: str, k: int = 3) -> Dict[str, Any]:
@@ -184,7 +193,7 @@ def build_from_hits(
             trav = queries.consulta_travessia(h["entity_id"])  # só formata string
             if trav:
                 consultas.append({
-                    "titulo": f"2) Travessia $lookup encadeada — licença {h['name']}",
+                    "titulo": f"2) Travessia $graphLookup — licença {h['name']}",
                     "consulta": trav,
                 })
         elif h["entity_type"] == "vendor":

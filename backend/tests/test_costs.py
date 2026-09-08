@@ -6,6 +6,8 @@ a partir dos documentos crus — se os dois baterem, a agregação está certa.
 """
 from app.core.db import get_db
 from app.graph.costs import _pipeline_por_centro, _pipeline_por_fornecedor
+from app.models.schemas import Collections as C
+from app.models.schemas import EdgeTypes as E
 
 
 def _group_stage(pipeline):
@@ -29,21 +31,30 @@ def test_por_fornecedor_agrupa_por_moeda():
 
 
 def _expected_totals():
+    """
+    Recalcula os totais direto do grafo cru (`graph_nodes` + `graph_edges`),
+    percorrendo as arestas na mão — a rede de segurança independente da agregação.
+    Gasto de cada alocação = quantity (aresta) x unit_cost (nó licença); o
+    fornecedor vem de licença → produto → fornecedor e o centro de custo de
+    projeto → time → centro.
+    """
     db = get_db()
-    lic = {l["_id"]: l for l in db.licenses.find()}
-    prod = {p["_id"]: p for p in db.products.find()}
-    vend = {v["_id"]: v["name"] for v in db.vendors.find()}
-    proj = {p["_id"]: p for p in db.projects.find()}
-    team = {t["_id"]: t for t in db.teams.find()}
-    cc = {c["_id"]: c for c in db.cost_centers.find()}
+    nodes = {n["_id"]: n for n in db[C.GRAPH_NODES].find()}
+    edges = list(db[C.GRAPH_EDGES].find())
+    # (from, tipo) -> to: cada aresta de salto único tem um destino só.
+    salto = {(e["from"], e["tipo"]): e["to"] for e in edges}
 
     by_vendor, by_cc = {}, {}
-    for a in db.allocations.find():
-        l = lic[a["license_id"]]
-        spend = a["quantity"] * l["unit_cost"]
-        vname = vend[prod[l["product_id"]]["vendor_id"]]
+    for a in edges:
+        if a["tipo"] != E.ALOCACAO:
+            continue
+        lic = nodes[a["from"]]
+        spend = a["props"]["quantity"] * lic["props"]["unit_cost"]
+        prod_id = salto[(a["from"], E.LICENCA_PRODUTO)]
+        vname = nodes[salto[(prod_id, E.PRODUTO_FORNECEDOR)]]["label"]
         by_vendor[vname] = by_vendor.get(vname, 0) + spend
-        code = cc[team[proj[a["project_id"]]["team_id"]]["cost_center_id"]]["code"]
+        team_id = salto[(a["to"], E.PROJETO_TIME)]
+        code = nodes[salto[(team_id, E.TIME_CENTRO)]]["label"]
         by_cc[code] = by_cc.get(code, 0) + spend
     return by_vendor, by_cc
 

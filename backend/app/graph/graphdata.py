@@ -8,30 +8,71 @@ Uma ARESTA representa um relacionamento entre duas entidades.
     node  = {"id": str, "tipo": str, "label": str, "props": {...}}
     edge  = {"source": str, "target": str, "tipo": str, "label": str|None}
 
-Decisão de modelagem: `allocations` NÃO vira um nó. Ela é a ponte
-licença↔projeto, então a representamos como uma ARESTA (licença → projeto)
-com `label` = quantidade. Isso deixa o grafo bem mais legível.
+Como agora os dados JÁ vivem como grafo (`graph_nodes` + `graph_edges`), montar
+o formato de exibição é quase direto: cada `graph_nodes` vira um nó e cada
+`graph_edges` vira uma aresta. Duas traduções acontecem aqui:
+
+  - `props` de exibição: expomos só os campos que a tela usa por tipo (o resto
+    dos campos de negócio fica no banco, fora do payload do grafo);
+  - `tipo` da aresta: no banco é um código de travessia (ex.: "produto_fornecedor");
+    na tela mostramos o rótulo legível (ex.: "fornecedor") via DISPLAY_ARESTA.
+
+Decisão de modelagem: `allocation` NÃO é um nó. Ela é a aresta licença → projeto
+(tipo "alocacao") com a quantidade em `props.quantity`, exibida como `label`.
 
 Tanto `explore.py` (grafo inteiro) quanto `subgraph.py` (subgrafo de uma
-resposta) usam os mesmos ajudantes daqui, para os rótulos e cores ficarem
+resposta) usam os mesmos ajudantes daqui, para rótulos e cores ficarem
 consistentes entre as duas visualizações.
 """
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-# Tipos de relacionamento (rótulo das arestas), num só lugar.
+from app.models.schemas import EdgeTypes as E
+
+# Tipos de relacionamento (rótulo LEGÍVEL das arestas), num só lugar.
 REL_FORNECEDOR = "fornecedor"       # produto/contrato -> fornecedor
 REL_CONTRATO = "contrato"           # licença -> contrato
 REL_PRODUTO = "produto"             # licença -> produto
-REL_ALOCACAO = "alocação"           # licença -> projeto (via allocations)
+REL_ALOCACAO = "alocação"           # licença -> projeto (aresta de alocação)
 REL_TIME = "time"                   # projeto -> time
 REL_CENTRO = "centro de custo"      # time -> centro de custo
 REL_PROJETO = "projeto"             # servidor -> projeto
+
+# Traduz o `tipo` de armazenamento da aresta (código da travessia) no rótulo
+# legível exibido no grafo.
+DISPLAY_ARESTA = {
+    E.PRODUTO_FORNECEDOR: REL_FORNECEDOR,
+    E.CONTRATO_FORNECEDOR: REL_FORNECEDOR,
+    E.LICENCA_CONTRATO: REL_CONTRATO,
+    E.LICENCA_PRODUTO: REL_PRODUTO,
+    E.ALOCACAO: REL_ALOCACAO,
+    E.PROJETO_TIME: REL_TIME,
+    E.TIME_CENTRO: REL_CENTRO,
+    E.SERVIDOR_PROJETO: REL_PROJETO,
+}
 
 
 def _iso(v: Any) -> Any:
     """Converte datas em texto ISO (JSON não sabe serializar datetime cru)."""
     return v.isoformat() if isinstance(v, datetime) else v
+
+
+def _props_exibicao(tipo: str, props: Dict[str, Any]) -> Dict[str, Any]:
+    """Só os campos de `props` que a tela mostra, por tipo de nó."""
+    if tipo == "contract":
+        return {"value": props.get("value"), "currency": props.get("currency")}
+    if tipo == "license":
+        return {
+            "expires_at": _iso(props.get("expires_at")),
+            "unit_cost": props.get("unit_cost"),
+            "currency": props.get("currency"),
+            "metric": props.get("metric"),
+        }
+    if tipo == "cost_center":
+        return {"name": props.get("name")}
+    if tipo == "server":
+        return {"cpu_sockets": props.get("cpu_sockets")}
+    return {}  # vendor, product, project, team: sem props de exibição
 
 
 class GraphBuilder:
@@ -74,46 +115,24 @@ class GraphBuilder:
         return {"nodes": self.nodes, "edges": arestas}
 
 
-# --- Ajudantes para criar cada tipo de nó com rótulo/props consistentes -----
+# --- Ajudantes: um `graph_nodes`/`graph_edges` vira nó/aresta de exibição ----
 
-def add_vendor(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "vendor", doc.get("name", ""), {})
-
-
-def add_product(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "product", doc.get("name", ""), {})
-
-
-def add_contract(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "contract", doc.get("reference", ""),
-                      {"value": doc.get("value"), "currency": doc.get("currency")})
+def add_node_doc(b: GraphBuilder, node: Dict[str, Any]) -> str:
+    """Adiciona ao builder um documento de `graph_nodes` (com props de exibição)."""
+    tipo = node.get("tipo", "")
+    return b.add_node(
+        node["_id"], tipo, node.get("label", ""),
+        _props_exibicao(tipo, node.get("props") or {}),
+    )
 
 
-def add_license(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "license", doc.get("name", ""), {
-        "expires_at": _iso(doc.get("expires_at")),
-        "unit_cost": doc.get("unit_cost"),
-        "currency": doc.get("currency"),
-        "metric": doc.get("metric"),
-    })
-
-
-def add_project(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "project", doc.get("name", ""), {})
-
-
-def add_team(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "team", doc.get("name", ""), {})
-
-
-def add_cost_center(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "cost_center", doc.get("code", ""),
-                      {"name": doc.get("name")})
-
-
-def add_server(b: GraphBuilder, doc: Dict[str, Any]) -> str:
-    return b.add_node(doc["_id"], "server", doc.get("hostname", ""),
-                      {"cpu_sockets": doc.get("cpu_sockets")})
+def add_edge_doc(b: GraphBuilder, edge: Dict[str, Any]) -> None:
+    """Adiciona ao builder um documento de `graph_edges` (com rótulo legível)."""
+    tipo_arm = edge.get("tipo", "")
+    props = edge.get("props") or {}
+    # Só a aresta de alocação carrega rótulo (a quantidade).
+    label = str(props.get("quantity")) if tipo_arm == E.ALOCACAO else None
+    b.add_edge(edge["from"], edge["to"], DISPLAY_ARESTA.get(tipo_arm, tipo_arm), label)
 
 
 def merge(subgrafos: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:

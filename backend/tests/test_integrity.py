@@ -11,6 +11,8 @@ banco estiver fora).
 """
 from app.core.db import get_db
 from app.graph import validation
+from app.models.schemas import Collections as C
+from app.models.schemas import EdgeTypes as E
 
 
 # --- Ponto 3: sem negativos, sem referências órfãs --------------------------
@@ -22,7 +24,10 @@ def test_seed_sem_violacoes_de_integridade(client):
 # --- Ponto 2: métricas de licenciamento -------------------------------------
 def test_metricas_de_licenca_no_dominio(client):
     permitido = {"per_cpu", "per_host", "per_user"}
-    metricas = {l.get("metric") for l in get_db().licenses.find({}, {"metric": 1})}
+    metricas = {
+        n["props"].get("metric")
+        for n in get_db()[C.GRAPH_NODES].find({"tipo": "license"}, {"props.metric": 1})
+    }
     assert metricas <= permitido, f"Métrica fora do domínio: {metricas - permitido}"
 
 
@@ -33,14 +38,18 @@ def test_custo_independe_da_metrica(client):
     antes fechar o elo servers->licenses (ver SPEC.md secoes 4 e 8).
     """
     db = get_db()
-    lic = {l["_id"]: l for l in db.licenses.find()}
-    prod = {p["_id"]: p for p in db.products.find()}
-    vend = {v["_id"]: v["name"] for v in db.vendors.find()}
+    nodes = {n["_id"]: n for n in db[C.GRAPH_NODES].find()}
+    edges = list(db[C.GRAPH_EDGES].find())
+    salto = {(e["from"], e["tipo"]): e["to"] for e in edges}
+
     esperado = {}
-    for a in db.allocations.find():
-        l = lic[a["license_id"]]
-        vname = vend[prod[l["product_id"]]["vendor_id"]]
-        esperado[vname] = esperado.get(vname, 0) + a["quantity"] * l["unit_cost"]
+    for a in edges:
+        if a["tipo"] != E.ALOCACAO:
+            continue
+        lic = nodes[a["from"]]
+        prod_id = salto[(a["from"], E.LICENCA_PRODUTO)]
+        vname = nodes[salto[(prod_id, E.PRODUTO_FORNECEDOR)]]["label"]
+        esperado[vname] = esperado.get(vname, 0) + a["props"]["quantity"] * lic["props"]["unit_cost"]
     got = {r["vendor"]: r["total"] for r in
            client.get("/graph/costs/by-vendor").json()}
     assert got == esperado

@@ -44,53 +44,71 @@ não RAG comum.
 
 ## 4. Modelo de dados
 
-Nove coleções no MongoDB, ligadas por referência (`_id` do vizinho), não por aninhamento.
-Referência permite percorrer o relacionamento em qualquer direção sem duplicar dados.
+Modelo **grafo-nativo**: duas coleções homogêneas — uma de nós, uma de arestas. É o formato
+que o operador de grafo do MongoDB (`$graphLookup`) percorre nativamente. Toda entidade do
+inventário é um **nó**; todo relacionamento é uma **aresta** com o mesmo formato.
 
-| Coleção | Campos-chave |
-|---|---|
-| `vendors` | `name` |
-| `products` | `vendor_id` → vendors, `name` |
-| `contracts` | `vendor_id` → vendors, `reference`, `value`, `currency`, `starts_at`, `ends_at` |
-| `licenses` | `product_id`, `contract_id`, `name`, `expires_at`, `unit_cost`, `currency`, `metric` |
-| `allocations` | `license_id`, `project_id`, `quantity`, `allocated_at` |
-| `projects` | `team_id` → teams, `name` |
-| `teams` | `cost_center_id` → cost_centers, `name` |
-| `cost_centers` | `name`, `code` |
-| `servers` | `hostname`, `cpu_sockets`, `project_id` |
+| Coleção | Campos | Observação |
+|---|---|---|
+| `graph_nodes` | `_id`, `tipo`, `label`, `props` | `tipo` ∈ {vendor, product, contract, license, project, team, cost_center, server}; `props` guarda os campos de negócio (`unit_cost`, `currency`, `expires_at`, `metric`, `code`, `hostname`, `cpu_sockets`, `name`, …) |
+| `graph_edges` | `_id`, `from`, `to`, `tipo`, `props` | `from`/`to` são `_id` de nós; `tipo` nomeia o vínculo; `props` guarda o atributo da aresta (ex.: `quantity` na alocação) |
+
+Os tipos de aresta (sempre no sentido da travessia *downstream*):
+
+| `tipo` da aresta | De → Para | `props` |
+|---|---|---|
+| `alocacao` | license → project | `quantity`, `allocated_at` |
+| `projeto_time` | project → team | — |
+| `time_centro` | team → cost_center | — |
+| `licenca_produto` | license → product | — |
+| `licenca_contrato` | license → contract | — |
+| `produto_fornecedor` | product → vendor | — |
+| `contrato_fornecedor` | contract → vendor | — |
+| `servidor_projeto` | server → project | — |
+
+O `_id` de cada nó é **determinístico**, derivado de uma chave natural namespaced por tipo
+(`oid_estavel("license:vSphere Standard 2026")`). Isso mantém a `search_index` válida entre
+seeds sem re-embeddar (ver adiante) e permite re-seedar sem quebrar referências.
 
 Mais uma coleção auxiliar: `search_index`, que guarda os *embeddings*. Cada documento tem
-`entity_type` ("license" ou "vendor"), `entity_id` (referência à entidade indexada), `name`,
+`entity_type` ("license" ou "vendor"), `entity_id` (o `_id` do nó indexado), `name`,
 `text` (a frase descritiva que foi vetorizada) e `embedding` (vetor de 1024 floats). Só
 licenças e fornecedores são indexados.
 
 ### Decisões e justificativas
 
-**`$lookup` encadeado, não `$graphLookup`.**
-`$graphLookup` faz travessia recursiva dentro de **uma** coleção auto-referenciada, com
-profundidade variável — hierarquias do tipo "funcionário → gerente → gerente do gerente".
-O caminho deste sistema (`licenses → allocations → projects → teams → cost_centers`)
-atravessa coleções **diferentes** com profundidade **fixa e conhecida**. Isso é `$lookup`
-encadeado, um join por salto no pipeline de agregação.
+**Travessia com `$graphLookup` sobre grafo homogêneo.**
+Como todas as arestas vivem numa coleção só (`graph_edges`) com o mesmo formato
+(`{from, to, tipo}`), o `$graphLookup` percorre o caminho recursando de nó em nó:
+`{startWith:"$_id", connectFromField:"to", connectToField:"from", from:"graph_edges"}`,
+com `restrictSearchWithMatch` no `tipo` para escolher quais vínculos seguir
+(ex.: `project → team → cost_center` restringe a `[projeto_time, time_centro]`). Os rótulos
+dos nós finais ainda são resolvidos com um `$lookup` em `graph_nodes` (join padrão) —
+o que a demo exibe é a **travessia** multi-salto, que é o `$graphLookup`.
 
-`$graphLookup` só passaria a fazer sentido se alguma coleção ganhasse auto-referência —
-por exemplo, `cost_centers` ou `teams` com um `parent_id` formando hierarquia de N níveis.
-Fica registrado como opção futura.
+> **Tradeoffs assumidos (registro honesto).** Custo é agregação **ponderada por caminho**
+> (`quantity × unit_cost`, somado por centro/moeda), e o `$graphLookup` coleta
+> *alcançabilidade*, não soma pesos por aresta — então extraímos o nó final do caminho e
+> agrupamos depois. Fica mais verboso e o `explain()` não mostra o IXSCAN 1:1 limpo que um
+> `$lookup` por salto exibia. Aceito de propósito: a demo é sobre o MongoDB **fazendo
+> grafo**, e o `$graphLookup` é o operador que comunica isso. (Uma versão anterior usava
+> `$lookup` encadeado; a decisão foi revertida — ver `CLAUDE.md` e o histórico do repo.)
 
-**`allocations` é coleção, não array dentro de `projects`.**
+**`allocations` é aresta, não array dentro de `projects`.**
 A relação licença ↔ projeto é muitos-para-muitos **com atributos próprios**. Um array de
 `license_ids` em `projects` responderia "quais licenças este projeto usa", mas quebraria em
 três pontos: a pergunta inversa fica cara, não há onde guardar a **quantidade** consumida,
-e sem quantidade não há como ratear custo. Modelada como coleção-ponte (tabela de arestas
-do grafo), os três problemas somem.
+e sem quantidade não há como ratear custo. Modelada como **aresta** `license → project`
+(`tipo:"alocacao"`) carregando `quantity` em `props`, os três problemas somem — e é a
+própria aresta que o grafo percorre.
 
-**`unit_cost` fica em `licenses`, não só `value` em `contracts`.**
+**`unit_cost` fica no nó `license`, não só `value` no contrato.**
 "Quanto gastamos por centro de custo" exige custo **por licença**, multiplicado pela
 quantidade alocada. O valor do contrato inteiro não desce até o centro de custo.
-A cadeia que fecha a conta: `licenses.unit_cost` × `allocations.quantity`, agregado por
-`cost_centers`.
+A cadeia que fecha a conta: `license.props.unit_cost` × `props.quantity` da aresta
+`alocacao`, agregado por nó `cost_center`.
 
-**`servers` existe porque VMware é licenciado por host/CPU.**
+**O nó `server` existe porque VMware é licenciado por host/CPU.**
 Sem uma entidade de servidor, o caso de uso mais realista do inventário (consumo de sockets
 vs. sockets licenciados) fica de fora.
 
@@ -111,31 +129,32 @@ Cada licença declara **como é cobrada**:
 | `per_host` | licenciada por servidor/host |
 | `per_user` | licenciada por usuário nomeado |
 
-Hoje `metric` é **descritiva**: o custo é sempre `unit_cost × allocations.quantity`,
-**independente da métrica**. A `quantity` da alocação já carrega o número contratado
-(CPUs, hosts ou usuários), então a conta fecha sem multiplicar pela métrica.
+Hoje `metric` é **descritiva**: o custo é sempre `unit_cost` (nó licença) × `quantity`
+(aresta `alocacao`), **independente da métrica**. A `quantity` da aresta já carrega o número
+contratado (CPUs, hosts ou usuários), então a conta fecha sem multiplicar pela métrica.
 
-**Por que `cpu_sockets` (de `servers`) não entra no cálculo `per_cpu`.** Seria natural
+**Por que `cpu_sockets` (do nó `server`) não entra no cálculo `per_cpu`.** Seria natural
 querer "sockets consumidos vs. sockets licenciados", mas o modelo atual **não fecha** essa
-conta: `servers` conhece o `project_id`, não a `license_id`. Como um projeto tem várias
-licenças e vários servidores, somar os `cpu_sockets` de um projeto **não** atribui consumo
-a uma licença específica. Fechar isso exige um vínculo `servers → licenses` — registrado
-como fora de escopo na seção 8. Enquanto ele não existe, o sistema **não** insinua esse
-número: a resposta honesta é dizer que o dado não existe, não estimá-lo.
+conta: a única aresta do servidor é `servidor_projeto` (server → project), não há aresta
+`server → license`. Como um projeto tem várias licenças e vários servidores, somar os
+`cpu_sockets` de um projeto **não** atribui consumo a uma licença específica. Fechar isso
+exige uma aresta `server → license` — registrado como fora de escopo na seção 8. Enquanto
+ela não existe, o sistema **não** insinua esse número: a resposta honesta é dizer que o dado
+não existe, não estimá-lo.
 
 ### Fronteira ObjectId × string
 
-Dentro do MongoDB (e dos pipelines de agregação), `_id` e todas as chaves estrangeiras são
-**ObjectId**. Na borda HTTP/JSON, viram **string**. A conversão acontece em um ponto de
-cada lado — nunca espalhada pelo código:
+Dentro do MongoDB (e dos pipelines de agregação), `_id` de nós e os campos `from`/`to` das
+arestas são **ObjectId**. Na borda HTTP/JSON, viram **string**. A conversão acontece em um
+ponto de cada lado — nunca espalhada pelo código:
 
 - **entrada** (str → ObjectId): `to_object_id()` em `app/graph/queries.py`;
 - **saída** (ObjectId → str): `_clean()` (queries.py), `$toString` nos `$project` e
   `str(_id)` no `GraphBuilder` (`app/graph/graphdata.py`).
 
-Os modelos Pydantic (`app/models/schemas.py`) tipam as FKs como `str` porque documentam a
-forma **exposta na API**. No banco elas são ObjectId; inserir uma FK como string crua
-quebraria os `$lookup` (que casam ObjectId com ObjectId).
+Os modelos Pydantic (`app/models/schemas.py`) tipam `from`/`to` como `str` porque documentam
+a forma **exposta na API**. No banco são ObjectId; inserir um `from`/`to` como string crua
+quebraria o `$graphLookup` (que casa `to` com `from` por igualdade de ObjectId).
 
 ---
 
@@ -147,7 +166,7 @@ Quatro passos, nesta ordem:
    "virtualização de servidores"; o sistema descobre que isso aponta para VMware/vSphere.
    Embeddings gerados pela Voyage AI (`voyage-3.5`, 1024 dimensões), índice
    `vector_index` no Atlas Vector Search.
-2. **`$lookup` encadeado** expande as conexões a partir desse nó.
+2. **`$graphLookup`** percorre o grafo a partir desse nó, recursando em `graph_edges`.
 3. **Agregações** fazem as contas (`unit_cost` × `quantity`, somado por centro de custo).
 4. **O LLM redige** a resposta a partir do contexto já estruturado.
 
@@ -222,7 +241,8 @@ escondido atrás de um texto bem escrito.
 
 - Autenticação e controle de acesso
 - Ingestão automática a partir de fontes reais (hoje os dados são *seed* sintético)
-- Vínculo entre `servers` e `licenses` — hoje o servidor conhece o projeto, mas não a
-  licença que consome. Sem isso, "sockets consumidos vs. sockets licenciados" não fecha.
+- Aresta `server → license` — hoje o servidor só tem a aresta `servidor_projeto` (conhece o
+  projeto, não a licença que consome). Sem ela, "sockets consumidos vs. sockets licenciados"
+  não fecha.
 - *Lazy load* da biblioteca de grafo (bundle de ~533 KB; irrelevante em demo local)
 - Deploy — o sistema roda apenas em máquina local

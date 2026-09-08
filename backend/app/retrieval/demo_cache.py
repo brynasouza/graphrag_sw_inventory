@@ -9,7 +9,7 @@ rede/quota.
 
 O QUE é guardado: o dicionário de contexto INTEIRO — candidatos, fatos, gastos,
 subgrafo e, principalmente, as `consultas`. As `consultas` trazem o $vectorSearch
-(com a entidade resolvida e o score) e o $lookup encadeado. Guardá-las junto é o
+(com a entidade resolvida e o score) e a travessia $graphLookup. Guardá-las junto é o
 que faz o painel "Ver a consulta" mostrar as DUAS fases do GraphRAG idêntico a
 uma execução normal, mesmo vindo do cache — a narrativa da demo não some. Só os
 `tempos` (voláteis) são descartados; quem responde recoloca os seus.

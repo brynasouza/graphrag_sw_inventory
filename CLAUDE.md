@@ -47,9 +47,13 @@ O modelo recebe contexto já estruturado e o *system prompt* proíbe inventar n�
 datas. Se um dado não existe no banco, a resposta correta é dizer que não existe — nunca
 estimar.
 
-**`$lookup` encadeado, não `$graphLookup`.**
-Veja a justificativa no `SPEC.md`, seção 4. `$graphLookup` só se aplicaria se alguma
-coleção ganhasse auto-referência.
+**Travessia com `$graphLookup` sobre grafo homogêneo.**
+O modelo é grafo-nativo: duas coleções, `graph_nodes` (`{_id, tipo, label, props}`) e
+`graph_edges` (`{_id, from, to, tipo, props}`). A travessia recursa em `graph_edges`
+seguindo `connectFromField:"to" → connectToField:"from"`. Veja a justificativa e os
+tradeoffs (custo/latência) no `SPEC.md`, seção 4. Isto **reverteu** a regra anterior
+("`$lookup` encadeado") de propósito — a demo é sobre o MongoDB fazendo grafo, e o
+`$graphLookup` é o operador que representa isso.
 
 ---
 

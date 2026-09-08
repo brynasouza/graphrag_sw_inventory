@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Tuple
 
 from app.core.db import get_db
 from app.models.schemas import Collections as C
+from app.models.schemas import EdgeTypes as E
 from app.retrieval import embeddings
 
 
@@ -49,44 +50,69 @@ _DESCRICAO_FUNCIONAL = {
 
 
 def _license_docs(db) -> List[Dict[str, Any]]:
-    """Uma frase por licença, enriquecida com produto e fornecedor."""
-    produtos = {p["_id"]: p for p in db[C.PRODUCTS].find()}
-    fornecedores = {v["_id"]: v["name"] for v in db[C.VENDORS].find()}
+    """Uma frase por licença, enriquecida com produto e fornecedor.
+
+    Agora que os dados são grafo, resolvemos produto e fornecedor pelas ARESTAS:
+    licença → produto (`licenca_produto`) e produto → fornecedor
+    (`produto_fornecedor`). O `_id` do nó é o mesmo `oid_estavel` de antes, então
+    `entity_id` continua idêntico — o texto gerado é byte-a-byte igual e nenhum
+    embedding precisa ser refeito (zero cota Voyage).
+    """
+    nodes = db[C.GRAPH_NODES]
+    edges = db[C.GRAPH_EDGES]
+
+    # Rótulos e ligações, carregados de uma vez (a demo é pequena).
+    label_produto = {n["_id"]: n["label"] for n in nodes.find({"tipo": "product"})}
+    label_fornecedor = {n["_id"]: n["label"] for n in nodes.find({"tipo": "vendor"})}
+    produto_do_fornecedor = {e["from"]: e["to"] for e in edges.find({"tipo": E.PRODUTO_FORNECEDOR})}
+    produto_da_licenca = {e["from"]: e["to"] for e in edges.find({"tipo": E.LICENCA_PRODUTO})}
 
     docs = []
-    for lic in db[C.LICENSES].find():
-        prod = produtos.get(lic["product_id"], {})
-        fornecedor = fornecedores.get(prod.get("vendor_id"), "?")
+    for lic in nodes.find({"tipo": "license"}):
+        props = lic.get("props", {})
+        prod_id = produto_da_licenca.get(lic["_id"])
+        prod_nome = label_produto.get(prod_id, "?")
+        fornecedor = label_fornecedor.get(produto_do_fornecedor.get(prod_id), "?")
         texto = (
-            f"Licença {lic['name']}. "
-            f"Produto {prod.get('name', '?')} do fornecedor {fornecedor}. "
-            f"Licenciada por {lic.get('metric', '?')}. "
-            f"Vence em {lic['expires_at'].strftime('%d/%m/%Y')}."
+            f"Licença {lic['label']}. "
+            f"Produto {prod_nome} do fornecedor {fornecedor}. "
+            f"Licenciada por {props.get('metric', '?')}. "
+            f"Vence em {props['expires_at'].strftime('%d/%m/%Y')}."
         )
         # Âncora funcional só para os produtos frágeis (ver _DESCRICAO_FUNCIONAL).
-        desc = _DESCRICAO_FUNCIONAL.get(prod.get("name"))
+        desc = _DESCRICAO_FUNCIONAL.get(prod_nome)
         if desc:
             texto += f" Usado para {desc}."
         docs.append({
             "entity_type": "license",
             "entity_id": lic["_id"],
-            "name": lic["name"],
+            "name": lic["label"],
             "text": texto,
         })
     return docs
 
 
 def _vendor_docs(db) -> List[Dict[str, Any]]:
-    """Uma frase por fornecedor, com seus produtos."""
+    """Uma frase por fornecedor, com seus produtos.
+
+    A lista de produtos de cada fornecedor vem das arestas `produto_fornecedor`.
+    A ordem de iteração dos nós é a ordem de inserção do seed (mesma ordem do
+    catálogo antigo), então o texto gerado é idêntico ao de antes.
+    """
+    nodes = db[C.GRAPH_NODES]
+    edges = db[C.GRAPH_EDGES]
+
+    fornecedor_do_produto = {e["from"]: e["to"] for e in edges.find({"tipo": E.PRODUTO_FORNECEDOR})}
     produtos_por_fornecedor: Dict[Any, List[str]] = {}
-    for p in db[C.PRODUCTS].find():
-        produtos_por_fornecedor.setdefault(p["vendor_id"], []).append(p["name"])
+    for p in nodes.find({"tipo": "product"}):
+        vid = fornecedor_do_produto.get(p["_id"])
+        produtos_por_fornecedor.setdefault(vid, []).append(p["label"])
 
     docs = []
-    for v in db[C.VENDORS].find():
+    for v in nodes.find({"tipo": "vendor"}):
         nomes = produtos_por_fornecedor.get(v["_id"], [])
         prods = ", ".join(nomes) or "sem produtos"
-        texto = f"Fornecedor {v['name']}. Produtos: {prods}."
+        texto = f"Fornecedor {v['label']}. Produtos: {prods}."
         # Herda a âncora funcional dos produtos que a têm (Red Hat, Atlassian e Microsoft).
         categorias = [_DESCRICAO_FUNCIONAL[n] for n in nomes if n in _DESCRICAO_FUNCIONAL]
         if categorias:
@@ -94,7 +120,7 @@ def _vendor_docs(db) -> List[Dict[str, Any]]:
         docs.append({
             "entity_type": "vendor",
             "entity_id": v["_id"],
-            "name": v["name"],
+            "name": v["label"],
             "text": texto,
         })
     return docs

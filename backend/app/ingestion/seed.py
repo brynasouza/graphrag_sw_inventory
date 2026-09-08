@@ -1,14 +1,16 @@
 """
-Popula o MongoDB com dados de exemplo de uma empresa brasileira média.
+Popula o MongoDB com dados de exemplo de uma empresa brasileira média,
+no MODELO GRAFO-NATIVO (`graph_nodes` + `graph_edges`).
 
 Rode a partir da pasta backend/ com:
     .venv/bin/python -m app.ingestion.seed
 
 O script é DETERMINÍSTICO e idempotente: apaga as coleções e recria tudo do
-zero com os MESMOS _id a cada execução. Como derivamos os _id de uma chave
-natural (nome/código), rodar o seed duas vezes produz exatamente os mesmos
-identificadores — o que também mantém a coleção `search_index` válida (os
-`entity_id` continuam apontando para documentos que existem).
+zero com os MESMOS _id a cada execução. Derivamos o _id de cada NÓ de uma chave
+natural namespaced por tipo (ex.: "vendor:VMware"), então rodar o seed duas
+vezes produz exatamente os mesmos identificadores — o que também mantém a
+coleção `search_index` válida (os `entity_id` continuam apontando para nós que
+existem, sem precisar re-embeddar).
 
 Sobre as datas: são RELATIVAS a uma data-base (padrão: hoje à meia-noite UTC).
 Isso é de propósito — a regra "algumas licenças vencem nos próximos 90 dias"
@@ -30,14 +32,15 @@ from app.core.db import get_db
 from app.core.indexes import ensure_indexes
 from app.graph.validation import check_integrity
 from app.models.schemas import Collections as C
+from app.models.schemas import EdgeTypes as E
 
 
 def oid_estavel(chave: str) -> ObjectId:
     """
     Gera um ObjectId determinístico a partir de uma chave natural.
     A mesma chave sempre devolve o mesmo _id — é isso que torna o seed
-    reproduzível. A chave já vem "namespaced" por coleção (ex.: "vendor:VMware")
-    para não haver colisão entre coleções diferentes.
+    reproduzível. A chave já vem "namespaced" por tipo (ex.: "vendor:VMware")
+    para não haver colisão entre tipos diferentes de nó.
     """
     return ObjectId(hashlib.md5(chave.encode()).hexdigest()[:24])
 
@@ -60,33 +63,43 @@ def dias(n: int) -> datetime:
 
 def seed():
     db = get_db()
+    nodes = db[C.GRAPH_NODES]
+    edges = db[C.GRAPH_EDGES]
 
     # 1) Limpa tudo para um estado conhecido -----------------------------
-    for nome in [C.VENDORS, C.PRODUCTS, C.CONTRACTS, C.LICENSES,
-                 C.ALLOCATIONS, C.PROJECTS, C.TEAMS, C.COST_CENTERS, C.SERVERS]:
-        db[nome].delete_many({})
+    nodes.delete_many({})
+    edges.delete_many({})
+
+    # Helpers locais: criam nó/aresta com _id determinístico e devolvem o _id.
+    def no(chave: str, tipo: str, label: str, props: dict) -> ObjectId:
+        _id = oid_estavel(chave)
+        nodes.insert_one({"_id": _id, "tipo": tipo, "label": label, "props": props})
+        return _id
+
+    def aresta(from_id: ObjectId, to_id: ObjectId, tipo: str, props: dict = None) -> None:
+        _id = oid_estavel(f"edge:{tipo}:{from_id}:{to_id}")
+        edges.insert_one({"_id": _id, "from": from_id, "to": to_id,
+                          "tipo": tipo, "props": props or {}})
 
     # 2) Centros de custo (3) -------------------------------------------
     cc = {}
     for name, code in [("Tecnologia da Informação", "CC-TI"),
                        ("Financeiro", "CC-FIN"),
                        ("Operações", "CC-OPS")]:
-        cc[code] = db[C.COST_CENTERS].insert_one(
-            {"_id": oid_estavel(f"cost_center:{code}"),
-             "name": name, "code": code}).inserted_id
+        cc[code] = no(f"cost_center:{code}", "cost_center", code,
+                      {"code": code, "name": name})
 
-    # 3) Times (5) -> centro de custo -----------------------------------
+    # 3) Times (5) -> centro de custo (aresta time → centro) ------------
     teams = {}
     for name, cc_code in [("Infraestrutura", "CC-TI"),
                           ("Plataforma", "CC-TI"),
                           ("DevOps", "CC-TI"),
                           ("Dados & BI", "CC-FIN"),
                           ("Aplicações Corporativas", "CC-OPS")]:
-        teams[name] = db[C.TEAMS].insert_one(
-            {"_id": oid_estavel(f"team:{name}"),
-             "name": name, "cost_center_id": cc[cc_code]}).inserted_id
+        teams[name] = no(f"team:{name}", "team", name, {"name": name})
+        aresta(teams[name], cc[cc_code], E.TIME_CENTRO)
 
-    # 4) Projetos (8) -> time -------------------------------------------
+    # 4) Projetos (8) -> time (aresta projeto → time) -------------------
     projects = {}
     for name, team in [("Datacenter Virtualização", "Infraestrutura"),
                        ("Observabilidade", "DevOps"),
@@ -96,17 +109,15 @@ def seed():
                        ("ERP Corporativo", "Aplicações Corporativas"),
                        ("Intranet", "Aplicações Corporativas"),
                        ("Data Lake", "Dados & BI")]:
-        projects[name] = db[C.PROJECTS].insert_one(
-            {"_id": oid_estavel(f"project:{name}"),
-             "name": name, "team_id": teams[team]}).inserted_id
+        projects[name] = no(f"project:{name}", "project", name, {"name": name})
+        aresta(projects[name], teams[team], E.PROJETO_TIME)
 
     # 5) Fornecedores (5) -----------------------------------------------
     vendors = {}
     for name in ["VMware", "Microsoft", "Oracle", "Red Hat", "Atlassian"]:
-        vendors[name] = db[C.VENDORS].insert_one(
-            {"_id": oid_estavel(f"vendor:{name}"), "name": name}).inserted_id
+        vendors[name] = no(f"vendor:{name}", "vendor", name, {"name": name})
 
-    # 6) Produtos -> fornecedor -----------------------------------------
+    # 6) Produtos -> fornecedor (aresta produto → fornecedor) -----------
     products = {}
     catalogo = {
         "VMware": ["vSphere", "vCenter"],
@@ -117,11 +128,10 @@ def seed():
     }
     for vendor, prods in catalogo.items():
         for p in prods:
-            products[p] = db[C.PRODUCTS].insert_one(
-                {"_id": oid_estavel(f"product:{p}"),
-                 "name": p, "vendor_id": vendors[vendor]}).inserted_id
+            products[p] = no(f"product:{p}", "product", p, {"name": p})
+            aresta(products[p], vendors[vendor], E.PRODUTO_FORNECEDOR)
 
-    # 7) Contratos (1 por fornecedor) -----------------------------------
+    # 7) Contratos (1 por fornecedor) -> fornecedor ---------------------
     contracts = {}
     contratos_def = [
         ("VMware", "CT-VMW-2024", 1_200_000, dias(-400), dias(330)),
@@ -131,14 +141,13 @@ def seed():
         ("Atlassian", "CT-ATL-2025", 300_000, dias(-100), dias(260)),
     ]
     for vendor, ref, value, start, end in contratos_def:
-        contracts[vendor] = db[C.CONTRACTS].insert_one({
-            "_id": oid_estavel(f"contract:{ref}"),
-            "vendor_id": vendors[vendor], "reference": ref,
-            "value": value, "currency": "BRL",
+        contracts[vendor] = no(f"contract:{ref}", "contract", ref, {
+            "reference": ref, "value": value, "currency": "BRL",
             "starts_at": start, "ends_at": end,
-        }).inserted_id
+        })
+        aresta(contracts[vendor], vendors[vendor], E.CONTRATO_FORNECEDOR)
 
-    # 8) Licenças (15) -> produto + contrato ----------------------------
+    # 8) Licenças (15) -> produto + contrato (2 arestas por licença) ----
     # (produto, contrato_fornecedor, rótulo, dias_p/_vencer, custo_unit, métrica)
     licencas_def = [
         ("vSphere",        "VMware",    "vSphere Standard 2026",     47,   4_500, "per_cpu"),   # vence < 90d
@@ -159,18 +168,17 @@ def seed():
     ]
     licenses = {}  # rótulo -> _id
     for prod, vendor, rotulo, dvenc, custo, metric in licencas_def:
-        licenses[rotulo] = db[C.LICENSES].insert_one({
-            "_id": oid_estavel(f"license:{rotulo}"),
+        licenses[rotulo] = no(f"license:{rotulo}", "license", rotulo, {
             "name": rotulo,
-            "product_id": products[prod],
-            "contract_id": contracts[vendor],
             "expires_at": dias(dvenc),
             "unit_cost": custo,
             "currency": "BRL",
             "metric": metric,
-        }).inserted_id
+        })
+        aresta(licenses[rotulo], products[prod], E.LICENCA_PRODUTO)
+        aresta(licenses[rotulo], contracts[vendor], E.LICENCA_CONTRATO)
 
-    # 9) Alocações (licença <-> projeto, com quantidade) ----------------
+    # 9) Alocações: aresta licença → projeto, com a quantidade em props --
     # (rótulo_licença, projeto, quantidade)
     alocacoes_def = [
         ("vSphere Standard 2026",     "Datacenter Virtualização", 8),
@@ -195,15 +203,11 @@ def seed():
         ("Confluence Cloud",          "Intranet",                80),
     ]
     for rotulo, proj, qtd in alocacoes_def:
-        db[C.ALLOCATIONS].insert_one({
-            "_id": oid_estavel(f"allocation:{rotulo}:{proj}"),
-            "license_id": licenses[rotulo],
-            "project_id": projects[proj],
-            "quantity": qtd,
-            "allocated_at": dias(-30),
-        })
+        aresta(licenses[rotulo], projects[proj], E.ALOCACAO,
+               {"quantity": qtd, "allocated_at": dias(-30)})
 
-    # 10) Servidores -> projeto (VMware é licenciado por host/CPU) ------
+    # 10) Servidores -> projeto (aresta servidor → projeto) -------------
+    # (VMware é licenciado por host/CPU, daí os sockets)
     servers_def = [
         ("esx-prod-01", 2, "Datacenter Virtualização"),
         ("esx-prod-02", 2, "Datacenter Virtualização"),
@@ -215,14 +219,11 @@ def seed():
         ("lake-node-01", 4, "Data Lake"),
     ]
     for hostname, sockets, proj in servers_def:
-        db[C.SERVERS].insert_one({
-            "_id": oid_estavel(f"server:{hostname}"),
-            "hostname": hostname,
-            "cpu_sockets": sockets,
-            "project_id": projects[proj],
-        })
+        sid = no(f"server:{hostname}", "server", hostname,
+                 {"hostname": hostname, "cpu_sockets": sockets})
+        aresta(sid, projects[proj], E.SERVIDOR_PROJETO)
 
-    # 11) Índices das FKs (para as junções não varrerem tudo) -----------
+    # 11) Índices do grafo (para o $graphLookup e os $match não varrerem tudo)
     ensure_indexes(db)
 
     # 12) Token de versão do seed --------------------------------------
@@ -236,15 +237,19 @@ def seed():
     )
 
     # Resumo -------------------------------------------------------------
-    print("Seed concluído. Documentos por coleção:")
-    for nome in [C.VENDORS, C.PRODUCTS, C.CONTRACTS, C.LICENSES,
-                 C.ALLOCATIONS, C.PROJECTS, C.TEAMS, C.COST_CENTERS, C.SERVERS]:
-        print(f"  {nome:>14}: {db[nome].count_documents({})}")
+    print("Seed concluído (modelo grafo-nativo).")
+    print(f"  {C.GRAPH_NODES:>12}: {nodes.count_documents({})} nós")
+    print(f"  {C.GRAPH_EDGES:>12}: {edges.count_documents({})} arestas")
+    print("\nNós por tipo:")
+    for tipo in ["vendor", "product", "contract", "license",
+                 "project", "team", "cost_center", "server"]:
+        print(f"  {tipo:>12}: {nodes.count_documents({'tipo': tipo})}")
 
-    venc90 = db[C.LICENSES].count_documents({"expires_at": {"$lte": dias(90)}})
+    venc90 = nodes.count_documents(
+        {"tipo": "license", "props.expires_at": {"$lte": dias(90)}})
     print(f"\nLicenças vencendo nos próximos 90 dias: {venc90}")
 
-    # Rede de segurança: confere integridade (negativos + referências órfãs).
+    # Rede de segurança: confere integridade (negativos + arestas órfãs).
     # Não é fatal — o seed já rodou; só AVISA se algo saiu torto, para pegar
     # cedo um erro introduzido numa futura mudança dos dados.
     problemas = check_integrity(db)
@@ -253,7 +258,7 @@ def seed():
         for p in problemas:
             print(f"  - {p}")
     else:
-        print("Integridade: OK (nenhum negativo, nenhuma referência órfã).")
+        print("Integridade: OK (nenhum negativo, nenhuma aresta órfã).")
 
 
 if __name__ == "__main__":

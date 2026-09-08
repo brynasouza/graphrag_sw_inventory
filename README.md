@@ -21,8 +21,8 @@ Pergunta do usuário
 1) Busca vetorial (Atlas Vector Search + Voyage AI)
       │  acha o "nó de entrada" (a licença/fornecedor que o usuário quis dizer)
       ▼
-2) Travessia do grafo ($lookup encadeado no MongoDB)
-      │  licença → allocations → projeto → time → centro de custo → servidores
+2) Travessia do grafo ($graphLookup no MongoDB)
+      │  licença → projeto → time → centro de custo (+ servidores)
       ▼
 3) Agregações de custo (unit_cost × quantity)
       │  soma o gasto por fornecedor / centro de custo
@@ -33,11 +33,14 @@ Pergunta do usuário
 Resposta + fatos usados (transparência)
 ```
 
-> **Por que `$lookup` encadeado e não `$graphLookup`?**
-> O caminho `licença → projeto → time → centro de custo` atravessa
-> **coleções diferentes** com profundidade fixa, então usamos um `$lookup`
-> por salto. `$graphLookup` só serve para hierarquias auto-referenciadas
-> (uma coleção que aponta para ela mesma), o que não existe neste modelo.
+> **Por que `$graphLookup`?**
+> O modelo é grafo-nativo: uma coleção de arestas homogêneas (`graph_edges`,
+> formato `{from, to, tipo}`). O `$graphLookup` recursa nessa coleção
+> (`connectFromField:"to" → connectToField:"from"`), com `restrictSearchWithMatch`
+> escolhendo quais tipos de vínculo seguir a cada travessia. É o operador de
+> grafo do MongoDB percorrendo um grafo de verdade. (Ver `lookup_vs_graphlookup.md`
+> para o histórico e os tradeoffs — custo é agregação ponderada por caminho, então
+> há pós-processamento.)
 
 ## Stack
 
@@ -49,24 +52,22 @@ Resposta + fatos usados (transparência)
 | LLM | Anthropic Claude (`claude-opus-5`) |
 | Frontend | React + Vite + TypeScript |
 
-## Modelo de dados (9 coleções)
+## Modelo de dados (grafo-nativo: 2 coleções)
 
-Ligadas por **referências** (`_id` do vizinho), para navegar o grafo em
-qualquer direção.
+Um grafo homogêneo: **nós** e **arestas**, cada um numa coleção de formato fixo.
+É o que o `$graphLookup` percorre nativamente.
 
-| Coleção | Campos-chave | Papel |
+| Coleção | Campos | Papel |
 |---|---|---|
-| `vendors` | `name` | Fornecedores (VMware, Microsoft, Oracle, Red Hat, Atlassian) |
-| `products` | `vendor_id`, `name` | Produtos de cada fornecedor |
-| `contracts` | `vendor_id`, `value`, `currency` | Contratos guarda-chuva |
-| `licenses` | `product_id`, `contract_id`, `expires_at`, `unit_cost`, `currency`, `metric` | Licenças, com custo unitário |
-| `allocations` | `license_id`, `project_id`, `quantity`, `allocated_at` | **Ponte licença↔projeto** (aresta do grafo); permite ratear custo |
-| `projects` | `team_id`, `name` | Projetos |
-| `teams` | `cost_center_id`, `name` | Times |
-| `cost_centers` | `code`, `name` | Centros de custo |
-| `servers` | `hostname`, `cpu_sockets`, `project_id` | Servidores (VMware é licenciado por host/CPU) |
+| `graph_nodes` | `_id`, `tipo`, `label`, `props` | Toda entidade: `tipo` ∈ {vendor, product, contract, license, project, team, cost_center, server}; `props` guarda os campos de negócio (`unit_cost`, `expires_at`, `metric`, `code`, `hostname`, `cpu_sockets`, …) |
+| `graph_edges` | `_id`, `from`, `to`, `tipo`, `props` | Todo relacionamento; `from`/`to` são `_id` de nós; `props` guarda o atributo da aresta (ex.: `quantity` na `alocacao`) |
 
-> **Custo real** = `licenses.unit_cost` × `allocations.quantity`, somado
+Tipos de aresta (sentido *downstream*): `alocacao` (license→project, com `quantity`),
+`projeto_time`, `time_centro`, `licenca_produto`, `licenca_contrato`, `produto_fornecedor`,
+`contrato_fornecedor`, `servidor_projeto`. O `_id` de cada nó é determinístico
+(`oid_estavel("tipo:chave")`), o que mantém a `search_index` válida entre seeds.
+
+> **Custo real** = `unit_cost` (nó `license`) × `quantity` (aresta `alocacao`), somado
 > por fornecedor ou centro de custo. A soma é **agrupada por moeda**: cada
 > par (grupo, moeda) vira uma linha própria, então gastos em moedas diferentes
 > nunca colapsam num único total sem conversão.
@@ -83,7 +84,7 @@ MVP_GraphRAG/
 │   │   ├── api/         # endpoints HTTP (/graph, /search, /ask)
 │   │   ├── core/        # config (.env) e conexão MongoDB
 │   │   ├── models/      # schemas Pydantic + nomes das coleções
-│   │   ├── graph/       # travessia ($lookup) e agregações de custo
+│   │   ├── graph/       # travessia ($graphLookup) e agregações de custo
 │   │   ├── retrieval/   # embeddings, busca vetorial e montagem de contexto
 │   │   ├── llm/         # geração da resposta com o Claude
 │   │   └── ingestion/   # seed + build de embeddings + def. do índice Atlas
@@ -135,9 +136,9 @@ python -m app.ingestion.seed
 > `SEED_DATA_BASE=2026-01-01` se precisar de datas estáveis (ex.: em teste).
 
 > **Validação de integridade.** Ao final, o seed roda `check_integrity`, que
-> varre valores negativos (quantidade, custo, sockets) e **referências órfãs**
-> (uma FK que aponta para um `_id` inexistente) — imprime um aviso se achar
-> algo, sem derrubar o seed. Na entrada, os schemas Pydantic já barram o
+> varre valores negativos (quantidade, custo, sockets) e **arestas órfãs**
+> (uma aresta cujo `from`/`to` aponta para um nó inexistente) — imprime um aviso
+> se achar algo, sem derrubar o seed. Na entrada, os schemas Pydantic já barram o
 > inválido: `quantity`/`cpu_sockets > 0`, `unit_cost`/`value ≥ 0` e `metric`
 > restrita a `per_cpu | per_host | per_user`.
 
@@ -212,9 +213,11 @@ npm run dev
 > "Ver a consulta" no frontend. O `/ask` já traz esses comandos em
 > `context.consultas`. Sem o parâmetro, a resposta é idêntica à de sempre.
 
-> **Desempenho.** As junções `$lookup` de custo/travessia trazem só os campos
-> usados (sub-pipeline `$project`) e casam pela chave indexada. Há índice em
-> `licenses.expires_at` (a tela de alertas filtra e ordena por ele). O
+> **Desempenho.** A travessia `$graphLookup` recursa em `graph_edges` com índices
+> em `from`, `to` e `tipo`; a resolução de rótulos usa `$lookup` por `_id`. Há
+> índice em `graph_nodes.props.expires_at` (a tela de alertas filtra e ordena por
+> ele). Custo é agregação ponderada por caminho, então há pós-processamento
+> (`$group`) — tradeoff assumido, ver `lookup_vs_graphlookup.md`. O
 > `/graph/explore` lê no máximo `?limite=N` documentos por coleção (default
 > 200) e marca `truncado=true` se cortou — protege contra um inventário grande
 > sem alterar a demo (~60 nós).
@@ -275,15 +278,15 @@ aplicadas em todo o app; nada mais precisa mudar.
 ## Limitações conhecidas
 
 - **`per_cpu` não fecha "sockets consumidos vs. licenciados".** O campo
-  `licenses.metric` (`per_cpu | per_host | per_user`) é hoje **descritivo**: o
-  custo é sempre `unit_cost × quantity`, independente da métrica. Seria natural
-  cruzar `servers.cpu_sockets` com uma licença `per_cpu`, mas o modelo não
-  permite: `servers` conhece o `project_id`, **não** a `license_id`. Como um
-  projeto tem várias licenças e vários servidores, somar sockets por projeto não
-  atribui consumo a uma licença específica. Fechar isso exige um vínculo
-  `servers → licenses` — registrado como fora de escopo (SPEC §8). Enquanto não
-  existe, o sistema **não estima** esse número: a resposta honesta é dizer que o
-  dado não existe.
+  `metric` do nó `license` (`per_cpu | per_host | per_user`) é hoje **descritivo**:
+  o custo é sempre `unit_cost × quantity`, independente da métrica. Seria natural
+  cruzar o `cpu_sockets` do nó `server` com uma licença `per_cpu`, mas o modelo
+  não permite: a única aresta do servidor é `servidor_projeto` (conhece o projeto,
+  **não** a licença). Como um projeto tem várias licenças e vários servidores,
+  somar sockets por projeto não atribui consumo a uma licença específica. Fechar
+  isso exige uma aresta `server → license` — registrada como fora de escopo
+  (SPEC §8). Enquanto não existe, o sistema **não estima** esse número: a resposta
+  honesta é dizer que o dado não existe.
 
 ## Segurança
 
