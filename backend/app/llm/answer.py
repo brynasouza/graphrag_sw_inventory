@@ -8,8 +8,10 @@ apenas organiza em linguagem natural o que o grafo já provou.
 
 Seguimos a referência atual da Anthropic:
   - SDK oficial `anthropic`;
-  - modelo padrão `claude-opus-5`;
-  - "adaptive thinking" (o modelo decide quanto raciocinar).
+  - modelo e comportamento vêm do `.env` (config.py) — padrão `claude-sonnet-5`,
+    rápido e ótimo para respostas curtas ancoradas nos fatos do grafo;
+  - "thinking" é OPCIONAL: quando desligado (padrão), o modelo escreve direto,
+    então a primeira palavra do streaming aparece mais cedo.
 O cliente é preguiçoso; erro amigável se a chave faltar.
 """
 import json
@@ -19,7 +21,17 @@ import anthropic
 
 from app.core.config import settings
 
-MODEL = "claude-opus-5"
+
+def _kwargs_thinking() -> Dict[str, Any]:
+    """
+    Monta o parâmetro `thinking` só se estiver ligado no .env. Quando desligado,
+    devolve {} — e OMITIMOS o parâmetro na chamada (em vez de mandar 'disabled'),
+    o jeito mais compatível entre modelos. Reaproveitado pela geração normal e
+    pela em streaming, para as duas não divergirem.
+    """
+    if settings.claude_thinking:
+        return {"thinking": {"type": "adaptive"}}
+    return {}
 
 # Instruções fixas de comportamento (system prompt).
 SYSTEM = (
@@ -79,11 +91,11 @@ def generate_answer(query: str, context: Dict[str, Any]) -> str:
     prompt = _build_prompt(query, context)
 
     msg = _get_client().messages.create(
-        model=MODEL,
-        max_tokens=1500,
-        thinking={"type": "adaptive"},
+        model=settings.claude_model,
+        max_tokens=settings.claude_max_tokens,
         system=SYSTEM,
         messages=[{"role": "user", "content": prompt}],
+        **_kwargs_thinking(),
     )
 
     # A resposta pode conter blocos de "pensamento" + texto; pegamos só o texto.
@@ -103,11 +115,11 @@ def stream_answer(query: str, context: Dict[str, Any]) -> Iterator[str]:
     prompt = _build_prompt(query, context)
 
     with _get_client().messages.stream(
-        model=MODEL,
-        max_tokens=1500,
-        thinking={"type": "adaptive"},
+        model=settings.claude_model,
+        max_tokens=settings.claude_max_tokens,
         system=SYSTEM,
         messages=[{"role": "user", "content": prompt}],
+        **_kwargs_thinking(),
     ) as stream:
         for pedaco in stream.text_stream:
             yield pedaco

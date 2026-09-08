@@ -25,6 +25,26 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     voyage_api_key: str = ""
 
+    # --- Geração da resposta (Claude) ---
+    # Modelo e comportamento da redação. Ficam configuráveis (não hardcoded) para
+    # trocar velocidade x sofisticação sem tocar no código:
+    #   - claude_model: Sonnet é bem mais rápido que Opus e ótimo para respostas
+    #     curtas ancoradas nos fatos que o grafo já entrega.
+    #   - claude_thinking: quando False, o modelo NÃO raciocina antes de escrever,
+    #     então a primeira palavra do streaming aparece mais cedo (melhor sensação
+    #     de velocidade). Os fatos já vêm prontos, então o ganho de ligar é baixo.
+    #   - claude_max_tokens: teto do tamanho da resposta.
+    claude_model: str = "claude-sonnet-5"
+    claude_thinking: bool = False
+    claude_max_tokens: int = 1500
+
+    # --- Pré-aquecimento do cache no startup ---
+    # Ao subir o backend, dispara (em segundo plano) as perguntas fixas da demo
+    # para o cache de retrieval nascer cheio — a primeira pergunta da demo já
+    # responde rápido. Desligue em desenvolvimento para não gastar cota da Voyage
+    # a cada restart.
+    warmup_cache_on_startup: bool = True
+
 
 # Instância única, importada em todo o projeto: `from app.core.config import settings`
 settings = Settings()
