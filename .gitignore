@@ -40,3 +40,9 @@ build/
 .idea/
 .vscode/
 *.log
+
+# ─── Documentos de uso pessoal (não versionar) ────────────────
+# Notas e materiais de apresentação que ficam só na máquina local.
+license_management.md
+lookup_vs_graphlookup.md
+pitch.md
