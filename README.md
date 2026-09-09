@@ -38,9 +38,8 @@ Resposta + fatos usados (transparência)
 > formato `{from, to, tipo}`). O `$graphLookup` recursa nessa coleção
 > (`connectFromField:"to" → connectToField:"from"`), com `restrictSearchWithMatch`
 > escolhendo quais tipos de vínculo seguir a cada travessia. É o operador de
-> grafo do MongoDB percorrendo um grafo de verdade. (Ver `lookup_vs_graphlookup.md`
-> para o histórico e os tradeoffs — custo é agregação ponderada por caminho, então
-> há pós-processamento.)
+> grafo do MongoDB percorrendo um grafo de verdade. (Custo é agregação ponderada
+> por caminho, então há pós-processamento — ver `SPEC.md` §4 para os tradeoffs.)
 
 ## Stack
 
@@ -217,7 +216,7 @@ npm run dev
 > em `from`, `to` e `tipo`; a resolução de rótulos usa `$lookup` por `_id`. Há
 > índice em `graph_nodes.props.expires_at` (a tela de alertas filtra e ordena por
 > ele). Custo é agregação ponderada por caminho, então há pós-processamento
-> (`$group`) — tradeoff assumido, ver `lookup_vs_graphlookup.md`. O
+> (`$group`) — tradeoff assumido, ver `SPEC.md` §4. O
 > `/graph/explore` lê no máximo `?limite=N` documentos por coleção (default
 > 200) e marca `truncado=true` se cortou — protege contra um inventário grande
 > sem alterar a demo (~60 nós).
