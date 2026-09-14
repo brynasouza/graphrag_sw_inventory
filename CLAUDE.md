@@ -2,60 +2,62 @@
 
 Convenções deste projeto. Leia antes de propor ou escrever qualquer coisa.
 
----
+## O que é
 
-## Contexto de quem toca neste projeto
+**MVP de GraphRAG para gestão de inventário de software corporativo.** Responde perguntas
+de negócio em linguagem natural sobre licenças, fornecedores, contratos, projetos e custos,
+combinando um grafo de relacionamentos no MongoDB Atlas com busca vetorial e um LLM.
 
-Solutions Architect com domínio de arquitetura e MongoDB, **iniciante em desenvolvimento**.
-Explique decisões em linguagem simples, sem jargão desnecessário. Quando houver escolha
-técnica, diga o porquê — não só o quê.
+Endereça uma dor real de clientes enterprise: perder o controle do próprio inventário —
+o que expira, quem é impactado, quanto se gasta — quando as respostas dependem de *relações*,
+não de documentos isolados. É um MVP construído sobre um caso de uso de cliente real e usado
+em demonstrações enterprise; portanto, robustez visual e credibilidade dos números importam
+tanto quanto o código funcionar.
 
-Este sistema é usado em **demonstrações para clientes enterprise**. Isso significa que
-robustez visual e credibilidade dos números importam tanto quanto o código funcionar.
+## Como trabalhar aqui
 
----
+- Leia o `SPEC.md` antes de codar — ele traz o modelo de dados e as decisões com suas
+  justificativas. Se o pedido contradiz algo lá, sinalize antes de implementar.
+- Mudança estrutural: apresente o plano e espere aprovação. Ajuste pequeno (valor, cor,
+  rótulo): execute direto.
+- Ao propor uma escolha técnica, explique o *porquê* em linguagem direta, não só o *quê*.
 
-## Antes de escrever código
+## Decisões de arquitetura fixas
 
-Leia o `SPEC.md`. Ele documenta o modelo de dados e as decisões de arquitetura com suas
-justificativas. Se a mudança pedida contradiz algo lá, **diga isso antes de implementar**.
+| Camada | Decisão |
+|---|---|
+| Banco | MongoDB Atlas + Atlas Vector Search |
+| Modelo de dados | Grafo-nativo homogêneo: `graph_nodes` + `graph_edges`, percorrido por `$graphLookup` |
+| Backend | Python 3.9+ · FastAPI · `pymongo` (driver síncrono) |
+| Embeddings | Voyage AI `voyage-3.5` · 1024 dimensões · índice `vector_index` |
+| LLM | Anthropic Claude `claude-sonnet-5` (configurável via `.env`) |
+| Frontend | React 18 + TypeScript + Vite · grafo em `react-force-graph-2d` |
 
-Para mudanças estruturais, apresente o plano e espere aprovação. Para ajustes pequenos
-(um valor, uma cor, um rótulo), pode executar direto.
+Versões exatas são fixadas em `backend/requirements.txt` e `frontend/package.json` — a tabela
+registra as escolhas, os arquivos são a fonte da verdade.
 
----
+## Regras inegociáveis
 
-## Regras que não se negociam
+- **Segredos fora do repositório.** `.env` fica no `.gitignore`; versionado é só o
+  `.env.example` com valores falsos. Antes de `git push`, confirme que `git status` não lista `.env`.
+- **Nenhuma marca de terceiro versionada.** `theme.ts` usa logo placeholder e paleta padrão.
+  Logos de cliente entram em runtime pelo painel e vivem só no `localStorage`.
+- **Nenhum valor visual fixo em componente.** Cor, largura, fonte, altura de logo — tudo vem
+  do tema: `theme.ts → applyTheme.ts` (injeta CSS var) → `index.css` (`var(...)`), lido via
+  `useTheme()`. Valor visual novo? Adicione ao `theme.ts` primeiro.
+- **Travessia com `$graphLookup` sobre grafo homogêneo.** Recursa em `graph_edges` por
+  `connectFromField:"to" → connectToField:"from"`. Reverteu o `$lookup` encadeado de
+  propósito — a demo é o MongoDB fazendo grafo. Tradeoffs no `SPEC.md` §4.
 
-**Segredos nunca entram no repositório.**
-`.env` está no `.gitignore` e permanece lá. O que vai versionado é o `.env.example` com
-valores falsos. Antes de qualquer `git push`, confirme que `git status` não lista o `.env`.
+## Contratos (não quebrar)
 
-**Nenhuma marca de terceiro no código versionado.**
-O `theme.ts` mantém logo placeholder genérico e paleta padrão. Logos de cliente são
-carregados em tempo de execução pelo painel de personalização e vivem apenas no
-`localStorage` do navegador.
-
-**Nenhuma cor fixa dentro de componente.**
-Todo valor visual — cor, largura, tamanho de fonte, altura de logo — vem do tema. O caminho
-é `theme.ts → applyTheme.ts` (injeta variável CSS) → `index.css` (consome via `var(...)`).
-Componentes leem via `useTheme()`. Se você precisar de um valor visual novo, adicione-o ao
-`theme.ts` primeiro.
-
-**O grafo garante os fatos; o LLM garante a linguagem.**
-O modelo recebe contexto já estruturado e o *system prompt* proíbe inventar números ou
-datas. Se um dado não existe no banco, a resposta correta é dizer que não existe — nunca
-estimar.
-
-**Travessia com `$graphLookup` sobre grafo homogêneo.**
-O modelo é grafo-nativo: duas coleções, `graph_nodes` (`{_id, tipo, label, props}`) e
-`graph_edges` (`{_id, from, to, tipo, props}`). A travessia recursa em `graph_edges`
-seguindo `connectFromField:"to" → connectToField:"from"`. Veja a justificativa e os
-tradeoffs (custo/latência) no `SPEC.md`, seção 4. Isto **reverteu** a regra anterior
-("`$lookup` encadeado") de propósito — a demo é sobre o MongoDB fazendo grafo, e o
-`$graphLookup` é o operador que representa isso.
-
----
+- **O grafo garante os fatos; o LLM garante a linguagem.** O modelo recebe contexto
+  estruturado e o *system prompt* proíbe inventar número ou data. Dado ausente no banco →
+  a resposta é dizer que não existe, nunca estimar.
+- **O comando exibido é o que de fato roda.** O painel "Ver a consulta" mostra o pipeline
+  MongoDB real, montado num builder único reaproveitado por execução e exibição — nunca um
+  pipeline "de vitrine". GETs: opt-in `?incluir_consulta=true` (sem ele, resposta inalterada,
+  por isso os testes seguem verdes). `/ask`: em `context.consultas`.
 
 ## Estrutura
 
@@ -64,101 +66,51 @@ backend/app/
   api/         rotas HTTP
   core/        config e conexão com o Mongo
   models/      schemas Pydantic
-  graph/       travessia de relacionamentos e agregações de custo
+  graph/       travessia e agregações de custo
   retrieval/   busca vetorial e montagem de contexto
-  llm/         geração da resposta final com o Claude
-  ingestion/   seed e geração de embeddings
+  llm/         geração da resposta com o Claude
+  ingestion/   seed e embeddings
 frontend/src/
   theme/       theme.ts — único lugar com valores visuais
   components/  Layout, GraphView, painel de personalização
-  pages/       Home (Perguntar), Painel, ExplorarGrafo
+  pages/       Perguntar, Painel, ExplorarGrafo
 ```
 
----
-
-## Como rodar
-
-Dois processos, em terminais separados:
+## Comandos
 
 ```bash
-# backend — porta 8000
+# backend (porta 8000) e frontend (porta 5173) — terminais separados
 cd backend && source .venv/bin/activate && uvicorn app.main:app --reload
-
-# frontend — porta 5173
 cd frontend && npm run dev
-```
 
-Se der `Address already in use`, o servidor já está rodando. Para derrubar:
-`lsof -ti:8000 | xargs kill`
-
----
-
-## Testes
-
-```bash
+# testes
 cd backend && .venv/bin/python -m pytest -q
 ```
 
-Testes que dependem da Voyage AI **pulam** em erro 503 em vez de falhar — instabilidade de
-rede externa não é bug de código. Mas se o mesmo teste pular repetidamente, investigue:
-pode ser problema de retry ou timeout disfarçado de rede.
-
-Os três testes das perguntas-alvo são a verificação central. Se eles quebrarem, algo
-importante quebrou.
-
----
-
-## Personalização em tempo de execução
-
-Painel abre com `Shift+P` ou pelo ícone de paleta na sidebar.
-Preferências ficam no `localStorage`, chave `inventario:tema`.
-
-Para limpar: botão "Restaurar padrão" no painel, ou
-`localStorage.removeItem('inventario:tema')` no console.
-
-**Sempre restaure o padrão antes de um `git push`** — garante que nenhuma marca de cliente
-ficou salva na sessão.
-
----
+`Address already in use` = servidor já rodando; derrube com `lsof -ti:8000 | xargs kill`.
+Os três testes das perguntas-alvo são a verificação central — se quebrarem, algo importante
+quebrou. Testes que dependem da Voyage AI **pulam** em erro 503 (rede externa não é bug);
+se pularem repetidamente, investigue retry/timeout disfarçado de rede.
 
 ## Seed e embeddings
 
-O `seed.py` é **determinístico**: os `_id` são derivados de uma chave natural
-(`oid_estavel("colecao:chave")`), então rodá-lo de novo gera os mesmos
-identificadores. As datas são **relativas** à data-base (hoje à meia-noite UTC),
-fixável via env `SEED_DATA_BASE` — isso é de propósito, para "vencer em 90 dias"
-seguir verdadeiro.
+- `seed.py` é **determinístico** (`_id` derivado de chave natural via `oid_estavel`) e usa
+  datas **relativas** à data-base (env `SEED_DATA_BASE`) — para "vence em 90 dias" seguir real.
+- Seed **não** toca em `search_index`; quem reconstrói é o `build_embeddings.py`. Rode-o de
+  novo só quando entidades ou seus textos mudarem, não a cada seed.
+- O texto vetorizado tem **âncora funcional** (`_DESCRICAO_FUNCIONAL`) só em OpenShift,
+  Confluence, Jira e Microsoft 365, para perguntas por conceito resolverem com folga. A âncora
+  vive **apenas** no texto indexado, nunca nos campos de negócio (um `find()` continua não
+  achando — é essa a diferença que a busca vetorial prova). Mudou uma frase? Rode de novo.
 
-O seed **não** toca em `search_index`; quem a reconstrói é o
-`build_embeddings.py`. Como os `_id` são estáveis, re-seedar mantém os
-`entity_id` válidos: só rode o `build_embeddings` de novo quando as entidades
-ou seus textos mudarem, não a cada seed.
+## Personalização em runtime
 
-O texto que o `build_embeddings.py` vetoriza inclui uma **âncora funcional
-cirúrgica** (`_DESCRICAO_FUNCIONAL`) só em OpenShift, Confluence, Jira e
-Microsoft 365 — para que perguntas semânticas como "plataforma de contêineres",
-"colaboração e documentação" e "planilhas e edição de documentos" resolvam com
-margem folgada. (O Microsoft 365 entrou depois: sem âncora, consultas genéricas
-por "documentos/planilhas" eram capturadas pela âncora de documentação do
-Confluence/Jira e ele nem aparecia no top-k.) VMware/vSphere **não** entram: a
-virtualização já resolve sozinha (enriquecer o que funciona só adiciona ruído).
-O conceito vive apenas no texto indexado (fonte do embedding), **nunca** nos
-campos de negócio — um `find()` por palavra-chave continua não achando, e é
-essa a diferença que a busca vetorial prova na demo. Mudou uma frase dessas?
-Rode o `build_embeddings` de novo.
-
-## Painel "Ver a consulta"
-
-Cada tela mostra o comando MongoDB real por trás do resultado (bloco recolhível,
-copiável). A regra vale aqui também: **o comando exibido é o que de fato roda** —
-o pipeline é montado num builder único, reaproveitado pela execução e pela
-exibição. Nunca fabrique um pipeline "de vitrine". Nos GETs isso vem pelo
-parâmetro opt-in `?incluir_consulta=true` (sem ele, a resposta é a de sempre —
-por isso os testes continuam verdes); no `/ask`, vem em `context.consultas`.
+Painel: `Shift+P` ou ícone de paleta. Preferências no `localStorage`, chave `inventario:tema`.
+Limpar: botão "Restaurar padrão" ou `localStorage.removeItem('inventario:tema')`.
+**Restaure o padrão antes de `git push`** — garante que nenhuma marca de cliente ficou salva.
 
 ## Pendências conhecidas
 
-- `servers` não tem vínculo com `licenses`. Enquanto isso não existir, "sockets consumidos
-  vs. sockets licenciados" não fecha.
-- O aviso do Vite sobre bundle > 500 KB é esperado (peso do `react-force-graph`) e benigno.
-  *Lazy load* resolveria, mas é desnecessário em demo local.
+- `servers` sem vínculo com `licenses` → "sockets consumidos vs. licenciados" não fecha.
+- Aviso do Vite de bundle > 500 KB (peso do `react-force-graph`) é esperado e benigno.
+</content>

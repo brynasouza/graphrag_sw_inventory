@@ -27,7 +27,7 @@ Pergunta do usuário
 3) Agregações de custo (unit_cost × quantity)
       │  soma o gasto por fornecedor / centro de custo
       ▼
-4) Geração da resposta (Claude claude-opus-5)
+4) Geração da resposta (Claude claude-sonnet-5)
       │  redige em português usando SOMENTE os fatos coletados
       ▼
 Resposta + fatos usados (transparência)
@@ -48,7 +48,7 @@ Resposta + fatos usados (transparência)
 | Backend | Python, FastAPI, pymongo |
 | Banco | MongoDB Atlas (+ Atlas Vector Search) |
 | Embeddings | Voyage AI (`voyage-3.5`) |
-| LLM | Anthropic Claude (`claude-opus-5`) |
+| LLM | Anthropic Claude (`claude-sonnet-5`) |
 | Frontend | React + Vite + TypeScript |
 
 ## Modelo de dados (grafo-nativo: 2 coleções)
