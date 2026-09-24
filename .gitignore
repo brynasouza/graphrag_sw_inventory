@@ -46,3 +46,5 @@ build/
 license_management.md
 lookup_vs_graphlookup.md
 pitch.md
+MongoDB_MVP_GraphRAG.md
+prompt_claude_code_migracao.md

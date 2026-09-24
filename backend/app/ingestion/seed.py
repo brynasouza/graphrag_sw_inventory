@@ -1,11 +1,15 @@
 """
 Popula o MongoDB com dados de exemplo de uma empresa brasileira média,
-no MODELO GRAFO-NATIVO (`graph_nodes` + `graph_edges`).
+no MODELO GRAFO-NATIVO AUTO-REFERENCIAL (coleção única `graph`).
 
 Rode a partir da pasta backend/ com:
     .venv/bin/python -m app.ingestion.seed
 
-O script é DETERMINÍSTICO e idempotente: apaga as coleções e recria tudo do
+Cada entidade é um documento em `graph` com suas arestas de SAÍDA embutidas
+(`arestas: [{to, tipo, props}]`). É esse formato que deixa o `$graphLookup`
+recursar dentro de UMA coleção só, sem `$lookup` para hidratar rótulos.
+
+O script é DETERMINÍSTICO e idempotente: apaga a coleção e recria tudo do
 zero com os MESMOS _id a cada execução. Derivamos o _id de cada NÓ de uma chave
 natural namespaced por tipo (ex.: "vendor:VMware"), então rodar o seed duas
 vezes produz exatamente os mesmos identificadores — o que também mantém a
@@ -63,23 +67,27 @@ def dias(n: int) -> datetime:
 
 def seed():
     db = get_db()
-    nodes = db[C.GRAPH_NODES]
-    edges = db[C.GRAPH_EDGES]
+    graph = db[C.GRAPH]
 
     # 1) Limpa tudo para um estado conhecido -----------------------------
-    nodes.delete_many({})
-    edges.delete_many({})
+    graph.delete_many({})
+
+    # Buffer em memória: _id -> documento do nó (com suas arestas de saída).
+    # Assim `aresta()` embute a aresta no nó de ORIGEM e no fim gravamos tudo
+    # de uma vez (insert_many). Mantém o seed determinístico e idempotente.
+    docs: dict = {}
 
     # Helpers locais: criam nó/aresta com _id determinístico e devolvem o _id.
     def no(chave: str, tipo: str, label: str, props: dict) -> ObjectId:
         _id = oid_estavel(chave)
-        nodes.insert_one({"_id": _id, "tipo": tipo, "label": label, "props": props})
+        docs[_id] = {"_id": _id, "tipo": tipo, "label": label,
+                     "props": props, "arestas": []}
         return _id
 
     def aresta(from_id: ObjectId, to_id: ObjectId, tipo: str, props: dict = None) -> None:
-        _id = oid_estavel(f"edge:{tipo}:{from_id}:{to_id}")
-        edges.insert_one({"_id": _id, "from": from_id, "to": to_id,
-                          "tipo": tipo, "props": props or {}})
+        # A aresta de saída vive DENTRO do nó de origem (adjacência embutida).
+        docs[from_id]["arestas"].append(
+            {"to": to_id, "tipo": tipo, "props": props or {}})
 
     # 2) Centros de custo (3) -------------------------------------------
     cc = {}
@@ -223,10 +231,13 @@ def seed():
                  {"hostname": hostname, "cpu_sockets": sockets})
         aresta(sid, projects[proj], E.SERVIDOR_PROJETO)
 
-    # 11) Índices do grafo (para o $graphLookup e os $match não varrerem tudo)
+    # 11) Grava todos os nós (com suas arestas embutidas) numa coleção só.
+    graph.insert_many(list(docs.values()))
+
+    # 12) Índices do grafo (para o $graphLookup e os $match não varrerem tudo)
     ensure_indexes(db)
 
-    # 12) Token de versão do seed --------------------------------------
+    # 13) Token de versão do seed --------------------------------------
     # A API guarda em memória o retrieval das perguntas fixas da demo.
     # Este doc é o sinal para invalidar esse cache: como o seed muda o
     # `ran_at`, a API percebe que os dados mudaram e recomputa.
@@ -237,15 +248,16 @@ def seed():
     )
 
     # Resumo -------------------------------------------------------------
-    print("Seed concluído (modelo grafo-nativo).")
-    print(f"  {C.GRAPH_NODES:>12}: {nodes.count_documents({})} nós")
-    print(f"  {C.GRAPH_EDGES:>12}: {edges.count_documents({})} arestas")
+    total_arestas = sum(len(d["arestas"]) for d in docs.values())
+    print("Seed concluído (modelo grafo-nativo auto-referencial).")
+    print(f"  {C.GRAPH:>12}: {graph.count_documents({})} nós, "
+          f"{total_arestas} arestas embutidas")
     print("\nNós por tipo:")
     for tipo in ["vendor", "product", "contract", "license",
                  "project", "team", "cost_center", "server"]:
-        print(f"  {tipo:>12}: {nodes.count_documents({'tipo': tipo})}")
+        print(f"  {tipo:>12}: {graph.count_documents({'tipo': tipo})}")
 
-    venc90 = nodes.count_documents(
+    venc90 = graph.count_documents(
         {"tipo": "license", "props.expires_at": {"$lte": dias(90)}})
     print(f"\nLicenças vencendo nos próximos 90 dias: {venc90}")
 

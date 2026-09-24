@@ -27,7 +27,7 @@ tanto quanto o código funcionar.
 | Camada | Decisão |
 |---|---|
 | Banco | MongoDB Atlas + Atlas Vector Search |
-| Modelo de dados | Grafo-nativo homogêneo: `graph_nodes` + `graph_edges`, percorrido por `$graphLookup` |
+| Modelo de dados | Grafo-nativo auto-referencial: coleção única `graph` (nós com arestas de saída embutidas), percorrida por `$graphLookup` — **zero `$lookup`** |
 | Backend | Python 3.9+ · FastAPI · `pymongo` (driver síncrono) |
 | Embeddings | Voyage AI `voyage-3.5` · 1024 dimensões · índice `vector_index` |
 | LLM | Anthropic Claude `claude-sonnet-5` (configurável via `.env`) |
@@ -45,9 +45,13 @@ registra as escolhas, os arquivos são a fonte da verdade.
 - **Nenhum valor visual fixo em componente.** Cor, largura, fonte, altura de logo — tudo vem
   do tema: `theme.ts → applyTheme.ts` (injeta CSS var) → `index.css` (`var(...)`), lido via
   `useTheme()`. Valor visual novo? Adicione ao `theme.ts` primeiro.
-- **Travessia com `$graphLookup` sobre grafo homogêneo.** Recursa em `graph_edges` por
-  `connectFromField:"to" → connectToField:"from"`. Reverteu o `$lookup` encadeado de
-  propósito — a demo é o MongoDB fazendo grafo. Tradeoffs no `SPEC.md` §4.
+- **Travessia com `$graphLookup` sobre coleção auto-referencial — ZERO `$lookup`.** Recursa
+  DENTRO de `graph` por `connectFromField:"arestas.to" → connectToField:"_id"`; cada nó
+  devolvido já traz `label`/`props`, então rótulo sai direto (filtra por `tipo`, lê `.label`) —
+  sem `$lookup` para hidratar. Reversa (servidor→projeto, produto→fornecedor): inverte os
+  campos ou usa `$elemMatch`. `restrictSearchWithMatch` filtra o NÓ-alvo por `tipo`. Nenhum
+  pipeline pode reintroduzir `$lookup` (é o critério de aceite do rewrite; há teste que trava).
+  Tradeoffs no `SPEC.md` §4.
 
 ## Contratos (não quebrar)
 

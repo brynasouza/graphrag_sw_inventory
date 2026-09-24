@@ -39,8 +39,8 @@ def test_explore_respeita_limite(client):
     if r.status_code == 503:
         pytest.skip("Banco indisponível para montar o grafo")
     data = r.json()
-    # 8 tipos de nó (allocations viram aresta), no máximo 1 doc por coleção.
-    assert len(data["nodes"]) <= 8
+    # Coleção única `graph` lida com .limit(1) -> no máximo 1 nó carregado.
+    assert len(data["nodes"]) <= 1
     assert data["truncado"] is True
 
     # Default: demo pequena cabe folgada -> nada truncado.
