@@ -8,9 +8,10 @@ Uma ARESTA representa um relacionamento entre duas entidades.
     node  = {"id": str, "tipo": str, "label": str, "props": {...}}
     edge  = {"source": str, "target": str, "tipo": str, "label": str|None}
 
-Como agora os dados JÁ vivem como grafo (`graph_nodes` + `graph_edges`), montar
-o formato de exibição é quase direto: cada `graph_nodes` vira um nó e cada
-`graph_edges` vira uma aresta. Duas traduções acontecem aqui:
+Como agora os dados vivem numa coleção auto-referencial (`graph`), montar o
+formato de exibição é quase direto: cada documento vira um nó e cada item do seu
+array `arestas` vira uma aresta (source = o nó dono, target = `aresta.to`). Duas
+traduções acontecem aqui:
 
   - `props` de exibição: expomos só os campos que a tela usa por tipo (o resto
     dos campos de negócio fica no banco, fora do payload do grafo);
@@ -115,10 +116,10 @@ class GraphBuilder:
         return {"nodes": self.nodes, "edges": arestas}
 
 
-# --- Ajudantes: um `graph_nodes`/`graph_edges` vira nó/aresta de exibição ----
+# --- Ajudantes: um documento de `graph` vira nó + arestas de exibição --------
 
 def add_node_doc(b: GraphBuilder, node: Dict[str, Any]) -> str:
-    """Adiciona ao builder um documento de `graph_nodes` (com props de exibição)."""
+    """Adiciona ao builder um documento da coleção `graph` (com props de exibição)."""
     tipo = node.get("tipo", "")
     return b.add_node(
         node["_id"], tipo, node.get("label", ""),
@@ -126,13 +127,13 @@ def add_node_doc(b: GraphBuilder, node: Dict[str, Any]) -> str:
     )
 
 
-def add_edge_doc(b: GraphBuilder, edge: Dict[str, Any]) -> None:
-    """Adiciona ao builder um documento de `graph_edges` (com rótulo legível)."""
-    tipo_arm = edge.get("tipo", "")
-    props = edge.get("props") or {}
+def add_edge_doc(b: GraphBuilder, source_id: Any, aresta: Dict[str, Any]) -> None:
+    """Adiciona ao builder uma aresta embutida (`{to, tipo, props}`) do nó `source_id`."""
+    tipo_arm = aresta.get("tipo", "")
+    props = aresta.get("props") or {}
     # Só a aresta de alocação carrega rótulo (a quantidade).
     label = str(props.get("quantity")) if tipo_arm == E.ALOCACAO else None
-    b.add_edge(edge["from"], edge["to"], DISPLAY_ARESTA.get(tipo_arm, tipo_arm), label)
+    b.add_edge(source_id, aresta["to"], DISPLAY_ARESTA.get(tipo_arm, tipo_arm), label)
 
 
 def merge(subgrafos: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:

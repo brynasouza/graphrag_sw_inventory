@@ -85,19 +85,16 @@ def formatar_aggregate(colecao: str, pipeline: List[dict]) -> str:
     return f"db.{colecao}.aggregate({_lista(pipeline, 0)})"
 
 
-def formatar_finds(colecoes: List[str], limite: int = None) -> str:
+def formatar_find(colecao: str, filtro: dict, sort: dict = None,
+                  limite: int = None) -> str:
     """
-    Uma linha `db.<colecao>.find({})` por coleção (na ordem informada).
-    Com `limite`, cada linha ganha `.limit(<n>)` — espelhando o `.limit()` real
-    aplicado na execução (ver explore.full_graph).
+    `db.<colecao>.find(<filtro>)` com `.sort(...)`/`.limit(...)` opcionais,
+    pronto para o mongosh. O `limite` espelha o `.limit()` real da execução
+    (ver explore.full_graph).
     """
-    sufixo = f".limit({limite})" if limite else ""
-    return "\n".join(f"db.{c}.find({{}}){sufixo}" for c in colecoes)
-
-
-def formatar_find(colecao: str, filtro: dict, sort: dict = None) -> str:
-    """`db.<colecao>.find(<filtro>)` com `.sort(...)` opcional, pronto para o mongosh."""
     comando = f"db.{colecao}.find({_objeto(filtro, 0)})"
     if sort:
         comando += f".sort({_objeto(sort, 0)})"
+    if limite:
+        comando += f".limit({limite})"
     return comando

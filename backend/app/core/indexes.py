@@ -1,20 +1,21 @@
 """
-Índices das coleções grafo — para o `$graphLookup` e os `$match`/`find` não
+Índices da coleção `graph` — para o `$graphLookup` e os `$match`/`find` não
 varrerem tudo.
 
 Por que isto existe:
-A travessia com `$graphLookup` recursa em `graph_edges` casando
-`connectToField:"from"` a cada salto — ou seja, faz uma busca por `from` para
-cada nó alcançado. Sem índice em `from`, cada salto é uma VARREDURA da coleção
-de arestas. As agregações e os subgrafos também filtram arestas por `to` e por
-`tipo`, e a tela de alertas filtra/ordena nós de licença por `props.expires_at`.
+A travessia com `$graphLookup` recursa na coleção `graph` casando
+`connectToField:"_id"` a cada salto no sentido "para baixo" (e
+`connectToField:"arestas.to"` no sentido reverso). O `_id` já é indexado
+automaticamente, mas `arestas.to` não — sem índice nele, a travessia reversa e
+o casamento por destino viram VARREDURA. As agregações/subgrafos também partem
+de `tipo`, e a tela de alertas filtra/ordena licenças por `props.expires_at`.
 No tamanho de demo o custo é pequeno, mas numa demo enterprise o `explain()`
-mostrando "COLLSCAN" tira credibilidade. Com índice, cada salto vira uma busca
-direta (IXSCAN).
+mostrando "COLLSCAN" tira credibilidade. Com índice, cada salto vira IXSCAN.
 
-O campo `_id` já é indexado automaticamente pelo MongoDB, então só criamos
-índice nos campos pelos quais consultamos: as pontas das arestas (`from`/`to`),
-o tipo (de nó e de aresta) e a data de expiração das licenças.
+Como as arestas agora vivem embutidas no nó (`arestas: [{to, tipo, props}]`),
+`arestas.to` e `arestas.tipo` são índices MULTIKEY (um valor por elemento do
+array). O `_id` é auto-indexado, então só criamos índice nos campos pelos quais
+consultamos.
 
 `create_index` é idempotente: se o índice já existe com a mesma definição, a
 chamada é um no-op barato. Por isso é seguro rodar isto a cada startup e no seed.
@@ -27,11 +28,10 @@ from app.models.schemas import Collections as C
 
 # (coleção, campo) — os campos pelos quais a travessia/agregações consultam.
 _INDICES: List[Tuple[str, str]] = [
-    (C.GRAPH_EDGES, "from"),          # cada salto do $graphLookup casa por `from`
-    (C.GRAPH_EDGES, "to"),            # agregações e subgrafo filtram por destino
-    (C.GRAPH_EDGES, "tipo"),          # restringe as arestas por tipo de relação
-    (C.GRAPH_NODES, "tipo"),          # lista/monta o grafo por tipo de entidade
-    (C.GRAPH_NODES, "props.expires_at"),  # tela de alertas filtra e ordena por expiração
+    (C.GRAPH, "tipo"),               # lista/monta o grafo por tipo de entidade
+    (C.GRAPH, "props.expires_at"),   # tela de alertas filtra e ordena por expiração
+    (C.GRAPH, "arestas.to"),         # $graphLookup (reverso) e casamento por destino
+    (C.GRAPH, "arestas.tipo"),       # restringe/filtra arestas por tipo de relação
 ]
 
 

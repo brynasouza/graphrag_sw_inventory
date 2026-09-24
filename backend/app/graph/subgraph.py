@@ -6,14 +6,18 @@ reunimos SÓ as entidades ligadas a ele, no formato canônico {nodes, edges}
 (veja graphdata.py). O frontend desenha esse subgrafo ao lado da resposta,
 mostrando de onde vieram os fatos.
 
-Como os dados já são grafo, um único `$graphLookup` a partir do nó traz TODAS as
-arestas alcançáveis "para baixo" (licença → produto/contrato/fornecedor e
-licença → projeto → time → centro). Os servidores de um projeto entram à parte,
-porque a aresta servidor → projeto aponta na direção contrária (o servidor é
-"pai" do projeto no sentido da alocação). Depois carregamos os nós citados e
-montamos o {nodes, edges} em Python.
+Como os dados vivem numa coleção auto-referencial (`graph`), um único
+`$graphLookup` a partir da licença traz TODOS os nós alcançáveis "para baixo"
+(produto/contrato/fornecedor e projeto → time → centro) — e cada nó devolvido já
+vem com suas `arestas` embutidas, então NÃO é preciso `$lookup` para hidratar
+nada. As arestas de exibição são reconstruídas a partir das `arestas` dos nós
+coletados (o GraphBuilder descarta as que ficarem sem uma das pontas).
+
+Os servidores de um projeto entram por travessia REVERSA (a aresta
+servidor → projeto sai do servidor, aponta "para baixo" no projeto): achamos os
+nós `server` cuja aresta `servidor_projeto` aponta para um projeto alocado.
 """
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List
 
 from app.graph import graphdata as G
 from app.graph.queries import to_object_id
@@ -22,67 +26,65 @@ from app.models.schemas import EdgeTypes as E
 
 VAZIO: Dict[str, List[Any]] = {"nodes": [], "edges": []}
 
-# Arestas percorríveis "para baixo" a partir de uma licença.
-_DESCENDENTES = [
-    E.ALOCACAO, E.LICENCA_PRODUTO, E.LICENCA_CONTRATO,
-    E.PRODUTO_FORNECEDOR, E.CONTRATO_FORNECEDOR,
-    E.PROJETO_TIME, E.TIME_CENTRO,
+# Tipos de NÓ alcançáveis "para baixo" a partir de uma licença. No modelo
+# auto-referencial, `restrictSearchWithMatch` filtra o nó-alvo por `tipo` (não a
+# aresta) — equivalente aqui, pois cada salto cai num tipo de nó distinto.
+_TIPOS_DESCENDENTES = [
+    "product", "contract", "vendor", "project", "team", "cost_center",
 ]
 
 
-def _descendentes_de_licencas(
+def _coletar_descendentes(
     db, license_ids: List[Any]
-) -> Tuple[List[Dict[str, Any]], Set[Any]]:
+) -> Dict[Any, Dict[str, Any]]:
     """
-    Todas as arestas alcançáveis a partir de um conjunto de licenças (+ os
-    servidores dos projetos alocados). Devolve (arestas, ids_de_nós).
+    Todos os nós alcançáveis a partir de um conjunto de licenças (+ os servidores
+    dos projetos alocados), indexados por `_id`. Cada nó traz suas `arestas`.
     """
     if not license_ids:
-        return [], set()
+        return {}
 
     pipeline = [
         {"$match": {"_id": {"$in": license_ids}, "tipo": "license"}},
         {"$graphLookup": {
-            "from": C.GRAPH_EDGES,
-            "startWith": "$_id",
-            "connectFromField": "to",
-            "connectToField": "from",
-            "as": "caminho",
-            "restrictSearchWithMatch": {"tipo": {"$in": _DESCENDENTES}},
+            "from": C.GRAPH,
+            "startWith": "$arestas.to",
+            "connectFromField": "arestas.to",
+            "connectToField": "_id",
+            "as": "descendentes",
+            "restrictSearchWithMatch": {"tipo": {"$in": _TIPOS_DESCENDENTES}},
         }},
-        {"$project": {"caminho": 1}},
     ]
 
-    arestas: List[Dict[str, Any]] = []
-    node_ids: Set[Any] = set(license_ids)
-    project_ids: Set[Any] = set()
-    for doc in db[C.GRAPH_NODES].aggregate(pipeline):
-        for e in doc.get("caminho", []):
-            arestas.append(e)
-            node_ids.add(e["from"])
-            node_ids.add(e["to"])
-            if e["tipo"] == E.ALOCACAO:
-                project_ids.add(e["to"])
+    nodes: Dict[Any, Dict[str, Any]] = {}
+    project_ids: set = set()
+    for doc in db[C.GRAPH].aggregate(pipeline):
+        descendentes = doc.pop("descendentes", [])
+        nodes[doc["_id"]] = doc            # a própria licença (com suas arestas)
+        for n in descendentes:
+            nodes[n["_id"]] = n
+        # projetos alocados: destino das arestas de alocação da licença.
+        for a in doc.get("arestas", []):
+            if a.get("tipo") == E.ALOCACAO:
+                project_ids.add(a["to"])
 
-    # Servidores dos projetos alocados (aresta servidor → projeto).
+    # Servidores dos projetos alocados (travessia reversa: server → projeto).
     if project_ids:
-        for e in db[C.GRAPH_EDGES].find(
-            {"tipo": E.SERVIDOR_PROJETO, "to": {"$in": list(project_ids)}}
-        ):
-            arestas.append(e)
-            node_ids.add(e["from"])
-            node_ids.add(e["to"])
+        for s in db[C.GRAPH].find({"tipo": "server", "arestas": {"$elemMatch": {
+            "tipo": E.SERVIDOR_PROJETO, "to": {"$in": list(project_ids)}}}}):
+            nodes[s["_id"]] = s
 
-    return arestas, node_ids
+    return nodes
 
 
-def _montar(db, arestas: List[Dict[str, Any]], node_ids: Set[Any]) -> Dict[str, Any]:
-    """Carrega os nós citados e monta o {nodes, edges} canônico."""
+def _montar(nodes_por_id: Dict[Any, Dict[str, Any]]) -> Dict[str, Any]:
+    """Monta o {nodes, edges} canônico a partir dos nós coletados e suas arestas."""
     b = G.GraphBuilder()
-    for n in db[C.GRAPH_NODES].find({"_id": {"$in": list(node_ids)}}):
+    for n in nodes_por_id.values():
         G.add_node_doc(b, n)
-    for e in arestas:
-        G.add_edge_doc(b, e)
+    for n in nodes_por_id.values():
+        for a in n.get("arestas", []):
+            G.add_edge_doc(b, n["_id"], a)
     return b.result()
 
 
@@ -91,10 +93,9 @@ def subgraph_for_license(db, license_id: str) -> Dict[str, List[Dict[str, Any]]]
     oid = to_object_id(license_id)
     if oid is None:
         return dict(VAZIO)
-    if db[C.GRAPH_NODES].find_one({"_id": oid, "tipo": "license"}, {"_id": 1}) is None:
+    if db[C.GRAPH].find_one({"_id": oid, "tipo": "license"}, {"_id": 1}) is None:
         return dict(VAZIO)
-    arestas, node_ids = _descendentes_de_licencas(db, [oid])
-    return _montar(db, arestas, node_ids)
+    return _montar(_coletar_descendentes(db, [oid]))
 
 
 def subgraph_for_vendor(db, vendor_id: str) -> Dict[str, List[Dict[str, Any]]]:
@@ -102,30 +103,28 @@ def subgraph_for_vendor(db, vendor_id: str) -> Dict[str, List[Dict[str, Any]]]:
     oid = to_object_id(vendor_id)
     if oid is None:
         return dict(VAZIO)
-    if db[C.GRAPH_NODES].find_one({"_id": oid, "tipo": "vendor"}, {"_id": 1}) is None:
+    vendor = db[C.GRAPH].find_one({"_id": oid, "tipo": "vendor"})
+    if vendor is None:
         return dict(VAZIO)
 
     # Produtos e contratos apontam PARA o fornecedor (arestas *_fornecedor).
-    arestas: List[Dict[str, Any]] = []
-    node_ids: Set[Any] = {oid}
+    # Travessia reversa: achamos os nós cuja aresta embutida aponta ao fornecedor.
+    nodes: Dict[Any, Dict[str, Any]] = {oid: vendor}
     product_ids: List[Any] = []
-    for e in db[C.GRAPH_EDGES].find(
-        {"to": oid, "tipo": {"$in": [E.PRODUTO_FORNECEDOR, E.CONTRATO_FORNECEDOR]}}
-    ):
-        arestas.append(e)
-        node_ids.add(e["from"])
-        if e["tipo"] == E.PRODUTO_FORNECEDOR:
-            product_ids.append(e["from"])
+    for n in db[C.GRAPH].find({"arestas": {"$elemMatch": {
+        "tipo": {"$in": [E.PRODUTO_FORNECEDOR, E.CONTRATO_FORNECEDOR]}, "to": oid}}}):
+        nodes[n["_id"]] = n
+        if n.get("tipo") == "product":
+            product_ids.append(n["_id"])
 
-    # Licenças desses produtos (aresta licença → produto).
+    # Licenças desses produtos (reversa: licença → produto).
     license_ids = [
-        e["from"] for e in db[C.GRAPH_EDGES].find(
-            {"tipo": E.LICENCA_PRODUTO, "to": {"$in": product_ids}}, {"from": 1})
+        lic["_id"] for lic in db[C.GRAPH].find(
+            {"tipo": "license", "arestas": {"$elemMatch": {
+                "tipo": E.LICENCA_PRODUTO, "to": {"$in": product_ids}}}},
+            {"_id": 1})
     ]
 
     # Toda a vizinhança "para baixo" dessas licenças.
-    ar_lic, ids_lic = _descendentes_de_licencas(db, license_ids)
-    arestas += ar_lic
-    node_ids |= ids_lic
-
-    return _montar(db, arestas, node_ids)
+    nodes.update(_coletar_descendentes(db, license_ids))
+    return _montar(nodes)

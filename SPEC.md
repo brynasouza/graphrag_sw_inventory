@@ -44,18 +44,20 @@ não RAG comum.
 
 ## 4. Modelo de dados
 
-Modelo **grafo-nativo**: duas coleções homogêneas — uma de nós, uma de arestas. É o formato
-que o operador de grafo do MongoDB (`$graphLookup`) percorre nativamente. Toda entidade do
-inventário é um **nó**; todo relacionamento é uma **aresta** com o mesmo formato.
+Modelo **grafo-nativo auto-referencial**: uma coleção única `graph`, onde cada documento é
+uma entidade **com suas arestas de saída embutidas**. É o padrão canônico que o operador de
+grafo do MongoDB (`$graphLookup`) percorre — recursando *dentro da própria coleção*, sem
+nenhum `$lookup`. Toda entidade do inventário é um **nó**; cada relacionamento *downstream*
+vive no array `arestas` do nó de origem.
 
 | Coleção | Campos | Observação |
 |---|---|---|
-| `graph_nodes` | `_id`, `tipo`, `label`, `props` | `tipo` ∈ {vendor, product, contract, license, project, team, cost_center, server}; `props` guarda os campos de negócio (`unit_cost`, `currency`, `expires_at`, `metric`, `code`, `hostname`, `cpu_sockets`, `name`, …) |
-| `graph_edges` | `_id`, `from`, `to`, `tipo`, `props` | `from`/`to` são `_id` de nós; `tipo` nomeia o vínculo; `props` guarda o atributo da aresta (ex.: `quantity` na alocação) |
+| `graph` | `_id`, `tipo`, `label`, `props`, `arestas` | `tipo` ∈ {vendor, product, contract, license, project, team, cost_center, server}; `props` guarda os campos de negócio (`unit_cost`, `currency`, `expires_at`, `metric`, `code`, `hostname`, `cpu_sockets`, `name`, …); `arestas` é a lista de arestas de saída `{to, tipo, props}` |
 
-Os tipos de aresta (sempre no sentido da travessia *downstream*):
+Cada item de `arestas` é `{to: <_id do nó destino>, tipo: <vínculo>, props: {…}}`. Os tipos
+de aresta (sempre no sentido da travessia *downstream*, embutidos no nó de origem):
 
-| `tipo` da aresta | De → Para | `props` |
+| `tipo` da aresta | De (nó dono) → Para (`to`) | `props` |
 |---|---|---|
 | `alocacao` | license → project | `quantity`, `allocated_at` |
 | `projeto_time` | project → team | — |
@@ -65,6 +67,11 @@ Os tipos de aresta (sempre no sentido da travessia *downstream*):
 | `produto_fornecedor` | product → vendor | — |
 | `contrato_fornecedor` | contract → vendor | — |
 | `servidor_projeto` | server → project | — |
+
+A travessia *downstream* é `{from:"graph", startWith:"$arestas.to", connectFromField:"arestas.to",
+connectToField:"_id"}`. Quando é preciso subir (ex.: servidores de um projeto, fornecedor de um
+produto), a travessia **reversa** inverte os campos (`connectFromField:"_id"`,
+`connectToField:"arestas.to"`) ou usa um `$elemMatch` em `arestas`.
 
 O `_id` de cada nó é **determinístico**, derivado de uma chave natural namespaced por tipo
 (`oid_estavel("license:vSphere Standard 2026")`). Isso mantém a `search_index` válida entre
@@ -77,22 +84,31 @@ licenças e fornecedores são indexados.
 
 ### Decisões e justificativas
 
-**Travessia com `$graphLookup` sobre grafo homogêneo.**
-Como todas as arestas vivem numa coleção só (`graph_edges`) com o mesmo formato
-(`{from, to, tipo}`), o `$graphLookup` percorre o caminho recursando de nó em nó:
-`{startWith:"$_id", connectFromField:"to", connectToField:"from", from:"graph_edges"}`,
-com `restrictSearchWithMatch` no `tipo` para escolher quais vínculos seguir
-(ex.: `project → team → cost_center` restringe a `[projeto_time, time_centro]`). Os rótulos
-dos nós finais ainda são resolvidos com um `$lookup` em `graph_nodes` (join padrão) —
-o que a demo exibe é a **travessia** multi-salto, que é o `$graphLookup`.
+**Travessia com `$graphLookup` sobre coleção auto-referencial — zero `$lookup`.**
+Cada nó carrega suas arestas de saída embutidas, então o `$graphLookup` recursa DENTRO da
+própria coleção `graph`: `{from:"graph", startWith:"$arestas.to", connectFromField:"arestas.to",
+connectToField:"_id"}`. Crucialmente, **cada documento devolvido pela travessia já é um nó
+completo, com seu `label` e `props`** — então os rótulos dos nós finais saem direto do
+resultado (filtrando por `tipo` e lendo `.label`), sem nenhum `$lookup` para hidratar. Essa é
+a diferença central do rewrite: no modelo antigo (duas coleções `graph_nodes` + `graph_edges`)
+a travessia devolvia só arestas `{from, to, tipo}` e 5 `$lookup` apareciam para resolver os
+atributos — lidos no painel "Ver a consulta" como "ainda é join estilo SQL". Agora não há
+nenhum. `restrictSearchWithMatch` continua podando a travessia, mas filtra o **nó alcançado**
+(por `tipo`), não a aresta — equivalente aqui, porque cada salto cai num tipo de nó distinto
+(`project → team → cost_center`, `product → vendor`).
 
-> **Tradeoffs assumidos (registro honesto).** Custo é agregação **ponderada por caminho**
+> **Tradeoffs assumidos (registro honesto).** (1) Custo é agregação **ponderada por caminho**
 > (`quantity × unit_cost`, somado por centro/moeda), e o `$graphLookup` coleta
-> *alcançabilidade*, não soma pesos por aresta — então extraímos o nó final do caminho e
-> agrupamos depois. Fica mais verboso e o `explain()` não mostra o IXSCAN 1:1 limpo que um
-> `$lookup` por salto exibia. Aceito de propósito: a demo é sobre o MongoDB **fazendo
-> grafo**, e o `$graphLookup` é o operador que comunica isso. (Uma versão anterior usava
-> `$lookup` encadeado; a decisão foi revertida — ver `CLAUDE.md` e o histórico do repo.)
+> *alcançabilidade*, não soma pesos por aresta. Mas no modelo embutido o `spend` de cada
+> alocação é **local**: `unit_cost` (campo do nó licença) × `quantity` (aresta `alocacao`
+> embutida) vivem no MESMO documento, calculados antes de percorrer; o `$graphLookup` só
+> resolve o nó final (fornecedor/centro). (2) A travessia **reversa** (servidor → projeto,
+> produto/contrato → fornecedor) é menos natural que no grafo homogêneo — resolvida invertendo
+> `connectFromField`/`connectToField` ou com `$elemMatch` em `arestas`. (3) A poda passou a ser
+> por **tipo de nó**, não por tipo de aresta. Aceito de propósito: a demo é sobre o MongoDB
+> **fazendo grafo** com `$graphLookup`, e agora o painel "Ver a consulta" não exibe um único
+> `$lookup`. (Versões anteriores usaram `$lookup` encadeado e depois duas coleções homogêneas;
+> ambas revertidas — ver `CLAUDE.md` e o histórico do repo.)
 
 **`allocations` é aresta, não array dentro de `projects`.**
 A relação licença ↔ projeto é muitos-para-muitos **com atributos próprios**. Um array de
@@ -144,17 +160,17 @@ não existe, não estimá-lo.
 
 ### Fronteira ObjectId × string
 
-Dentro do MongoDB (e dos pipelines de agregação), `_id` de nós e os campos `from`/`to` das
-arestas são **ObjectId**. Na borda HTTP/JSON, viram **string**. A conversão acontece em um
+Dentro do MongoDB (e dos pipelines de agregação), `_id` de nós e o campo `to` de cada aresta
+embutida são **ObjectId**. Na borda HTTP/JSON, viram **string**. A conversão acontece em um
 ponto de cada lado — nunca espalhada pelo código:
 
 - **entrada** (str → ObjectId): `to_object_id()` em `app/graph/queries.py`;
-- **saída** (ObjectId → str): `_clean()` (queries.py), `$toString` nos `$project` e
-  `str(_id)` no `GraphBuilder` (`app/graph/graphdata.py`).
+- **saída** (ObjectId → str): `$toString` nos `$project` e `str(_id)`/`str(to)` no
+  `GraphBuilder` (`app/graph/graphdata.py`).
 
-Os modelos Pydantic (`app/models/schemas.py`) tipam `from`/`to` como `str` porque documentam
-a forma **exposta na API**. No banco são ObjectId; inserir um `from`/`to` como string crua
-quebraria o `$graphLookup` (que casa `to` com `from` por igualdade de ObjectId).
+Os modelos Pydantic (`app/models/schemas.py`) tipam `Aresta.to` como `str` porque documentam
+a forma **exposta na API**. No banco é ObjectId; inserir um `to` como string crua quebraria o
+`$graphLookup` (que casa `arestas.to` com `_id` por igualdade de ObjectId).
 
 ---
 
@@ -166,7 +182,8 @@ Quatro passos, nesta ordem:
    "virtualização de servidores"; o sistema descobre que isso aponta para VMware/vSphere.
    Embeddings gerados pela Voyage AI (`voyage-3.5`, 1024 dimensões), índice
    `vector_index` no Atlas Vector Search.
-2. **`$graphLookup`** percorre o grafo a partir desse nó, recursando em `graph_edges`.
+2. **`$graphLookup`** percorre o grafo a partir desse nó, recursando na coleção `graph`
+   pelas arestas embutidas (`arestas.to` → `_id`), sem nenhum `$lookup`.
 3. **Agregações** fazem as contas (`unit_cost` × `quantity`, somado por centro de custo).
 4. **O LLM redige** a resposta a partir do contexto já estruturado.
 

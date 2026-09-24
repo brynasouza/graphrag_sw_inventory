@@ -34,21 +34,22 @@ def _licenca_detalhe(db, license_id: str) -> Tuple[Optional[str], Optional[float
     oid = queries.to_object_id(license_id)
     if oid is None:
         return None, None, None
-    lic = db[C.GRAPH_NODES].find_one({"_id": oid, "tipo": "license"}, {"props": 1})
+    lic = db[C.GRAPH].find_one(
+        {"_id": oid, "tipo": "license"}, {"props": 1, "arestas": 1})
     if lic is None:
         return None, None, None
     props = lic.get("props", {})
 
-    # Fornecedor: licença → produto → fornecedor (duas arestas do grafo).
+    # Fornecedor: licença → produto → fornecedor, pelas ARESTAS embutidas.
     fornecedor = None
-    e_prod = db[C.GRAPH_EDGES].find_one(
-        {"from": oid, "tipo": E.LICENCA_PRODUTO}, {"to": 1})
-    if e_prod:
-        e_vend = db[C.GRAPH_EDGES].find_one(
-            {"from": e_prod["to"], "tipo": E.PRODUTO_FORNECEDOR}, {"to": 1})
-        if e_vend:
-            vend = db[C.GRAPH_NODES].find_one(
-                {"_id": e_vend["to"], "tipo": "vendor"}, {"label": 1})
+    prod_id = next((a["to"] for a in lic.get("arestas", [])
+                    if a.get("tipo") == E.LICENCA_PRODUTO), None)
+    if prod_id is not None:
+        prod = db[C.GRAPH].find_one({"_id": prod_id, "tipo": "product"}, {"arestas": 1})
+        vend_id = next((a["to"] for a in (prod or {}).get("arestas", [])
+                        if a.get("tipo") == E.PRODUTO_FORNECEDOR), None)
+        if vend_id is not None:
+            vend = db[C.GRAPH].find_one({"_id": vend_id, "tipo": "vendor"}, {"label": 1})
             fornecedor = vend["label"] if vend else None
 
     return fornecedor, props.get("unit_cost"), props.get("currency")

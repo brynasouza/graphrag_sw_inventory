@@ -52,23 +52,33 @@ _DESCRICAO_FUNCIONAL = {
 def _license_docs(db) -> List[Dict[str, Any]]:
     """Uma frase por licença, enriquecida com produto e fornecedor.
 
-    Agora que os dados são grafo, resolvemos produto e fornecedor pelas ARESTAS:
-    licença → produto (`licenca_produto`) e produto → fornecedor
-    (`produto_fornecedor`). O `_id` do nó é o mesmo `oid_estavel` de antes, então
-    `entity_id` continua idêntico — o texto gerado é byte-a-byte igual e nenhum
-    embedding precisa ser refeito (zero cota Voyage).
+    Agora que os dados são grafo AUTO-REFERENCIAL, resolvemos produto e
+    fornecedor pelas ARESTAS embutidas: a licença tem uma aresta `licenca_produto`
+    (→ produto) e o produto tem uma aresta `produto_fornecedor` (→ fornecedor). O
+    `_id` do nó é o mesmo `oid_estavel` de antes, então `entity_id` continua
+    idêntico — o texto gerado é byte-a-byte igual e nenhum embedding precisa ser
+    refeito (zero cota Voyage).
     """
-    nodes = db[C.GRAPH_NODES]
-    edges = db[C.GRAPH_EDGES]
+    graph = db[C.GRAPH]
 
     # Rótulos e ligações, carregados de uma vez (a demo é pequena).
-    label_produto = {n["_id"]: n["label"] for n in nodes.find({"tipo": "product"})}
-    label_fornecedor = {n["_id"]: n["label"] for n in nodes.find({"tipo": "vendor"})}
-    produto_do_fornecedor = {e["from"]: e["to"] for e in edges.find({"tipo": E.PRODUTO_FORNECEDOR})}
-    produto_da_licenca = {e["from"]: e["to"] for e in edges.find({"tipo": E.LICENCA_PRODUTO})}
+    label_produto = {n["_id"]: n["label"] for n in graph.find({"tipo": "product"})}
+    label_fornecedor = {n["_id"]: n["label"] for n in graph.find({"tipo": "vendor"})}
+    # produto → fornecedor: aresta `produto_fornecedor` embutida no produto.
+    produto_do_fornecedor = {
+        p["_id"]: a["to"]
+        for p in graph.find({"tipo": "product"}, {"arestas": 1})
+        for a in p.get("arestas", []) if a.get("tipo") == E.PRODUTO_FORNECEDOR
+    }
+    # licença → produto: aresta `licenca_produto` embutida na licença.
+    produto_da_licenca = {
+        lic["_id"]: a["to"]
+        for lic in graph.find({"tipo": "license"}, {"arestas": 1})
+        for a in lic.get("arestas", []) if a.get("tipo") == E.LICENCA_PRODUTO
+    }
 
     docs = []
-    for lic in nodes.find({"tipo": "license"}):
+    for lic in graph.find({"tipo": "license"}):
         props = lic.get("props", {})
         prod_id = produto_da_licenca.get(lic["_id"])
         prod_nome = label_produto.get(prod_id, "?")
@@ -95,21 +105,24 @@ def _license_docs(db) -> List[Dict[str, Any]]:
 def _vendor_docs(db) -> List[Dict[str, Any]]:
     """Uma frase por fornecedor, com seus produtos.
 
-    A lista de produtos de cada fornecedor vem das arestas `produto_fornecedor`.
-    A ordem de iteração dos nós é a ordem de inserção do seed (mesma ordem do
-    catálogo antigo), então o texto gerado é idêntico ao de antes.
+    A lista de produtos de cada fornecedor vem das arestas `produto_fornecedor`
+    embutidas em cada produto. A ordem de iteração dos nós é a ordem de inserção
+    do seed (mesma ordem do catálogo antigo), então o texto gerado é idêntico.
     """
-    nodes = db[C.GRAPH_NODES]
-    edges = db[C.GRAPH_EDGES]
+    graph = db[C.GRAPH]
 
-    fornecedor_do_produto = {e["from"]: e["to"] for e in edges.find({"tipo": E.PRODUTO_FORNECEDOR})}
+    fornecedor_do_produto = {
+        p["_id"]: a["to"]
+        for p in graph.find({"tipo": "product"}, {"arestas": 1})
+        for a in p.get("arestas", []) if a.get("tipo") == E.PRODUTO_FORNECEDOR
+    }
     produtos_por_fornecedor: Dict[Any, List[str]] = {}
-    for p in nodes.find({"tipo": "product"}):
+    for p in graph.find({"tipo": "product"}):
         vid = fornecedor_do_produto.get(p["_id"])
         produtos_por_fornecedor.setdefault(vid, []).append(p["label"])
 
     docs = []
-    for v in nodes.find({"tipo": "vendor"}):
+    for v in graph.find({"tipo": "vendor"}):
         nomes = produtos_por_fornecedor.get(v["_id"], [])
         prods = ", ".join(nomes) or "sem produtos"
         texto = f"Fornecedor {v['label']}. Produtos: {prods}."

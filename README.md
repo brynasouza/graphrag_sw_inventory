@@ -33,13 +33,15 @@ Pergunta do usuário
 Resposta + fatos usados (transparência)
 ```
 
-> **Por que `$graphLookup`?**
-> O modelo é grafo-nativo: uma coleção de arestas homogêneas (`graph_edges`,
-> formato `{from, to, tipo}`). O `$graphLookup` recursa nessa coleção
-> (`connectFromField:"to" → connectToField:"from"`), com `restrictSearchWithMatch`
-> escolhendo quais tipos de vínculo seguir a cada travessia. É o operador de
-> grafo do MongoDB percorrendo um grafo de verdade. (Custo é agregação ponderada
-> por caminho, então há pós-processamento — ver `SPEC.md` §4 para os tradeoffs.)
+> **Por que `$graphLookup` — e por que ZERO `$lookup`?**
+> O modelo é grafo-nativo AUTO-REFERENCIAL: uma coleção única `graph`, onde cada
+> nó tem suas arestas de saída embutidas (`arestas: [{to, tipo, props}]`). O
+> `$graphLookup` recursa DENTRO dela (`connectFromField:"arestas.to" →
+> connectToField:"_id"`), e como cada nó devolvido já traz `label`/`props`, os
+> rótulos saem direto — **sem nenhum `$lookup`** para hidratar. É o operador de
+> grafo do MongoDB percorrendo um grafo de verdade, e o painel "Ver a consulta"
+> não exibe um único join estilo SQL. (Custo é agregação ponderada por caminho,
+> mas o `spend` é local ao nó licença — ver `SPEC.md` §4 para os tradeoffs.)
 
 ## Stack
 
@@ -51,15 +53,15 @@ Resposta + fatos usados (transparência)
 | LLM | Anthropic Claude (`claude-sonnet-5`) |
 | Frontend | React + Vite + TypeScript |
 
-## Modelo de dados (grafo-nativo: 2 coleções)
+## Modelo de dados (grafo-nativo auto-referencial: 1 coleção)
 
-Um grafo homogêneo: **nós** e **arestas**, cada um numa coleção de formato fixo.
-É o que o `$graphLookup` percorre nativamente.
+Uma coleção única `graph`: cada documento é um **nó** com suas **arestas de saída
+embutidas**. É o padrão canônico que o `$graphLookup` percorre recursando dentro
+da própria coleção — sem `$lookup`.
 
 | Coleção | Campos | Papel |
 |---|---|---|
-| `graph_nodes` | `_id`, `tipo`, `label`, `props` | Toda entidade: `tipo` ∈ {vendor, product, contract, license, project, team, cost_center, server}; `props` guarda os campos de negócio (`unit_cost`, `expires_at`, `metric`, `code`, `hostname`, `cpu_sockets`, …) |
-| `graph_edges` | `_id`, `from`, `to`, `tipo`, `props` | Todo relacionamento; `from`/`to` são `_id` de nós; `props` guarda o atributo da aresta (ex.: `quantity` na `alocacao`) |
+| `graph` | `_id`, `tipo`, `label`, `props`, `arestas` | Toda entidade: `tipo` ∈ {vendor, product, contract, license, project, team, cost_center, server}; `props` guarda os campos de negócio (`unit_cost`, `expires_at`, `metric`, `code`, `hostname`, `cpu_sockets`, …); `arestas` é a lista de arestas de saída `{to, tipo, props}` (ex.: `quantity` na `alocacao`) |
 
 Tipos de aresta (sentido *downstream*): `alocacao` (license→project, com `quantity`),
 `projeto_time`, `time_centro`, `licenca_produto`, `licenca_contrato`, `produto_fornecedor`,
@@ -107,14 +109,29 @@ MVP_GraphRAG/
 
 ## Como rodar
 
+```bash
+git clone <url-do-repositório> MVP_GraphRAG
+cd MVP_GraphRAG
+```
+
 ### 1. Variáveis de ambiente
 
 ```bash
 cp .env.example .env
 ```
-Edite o `.env` e preencha `MONGODB_URI`, `ANTHROPIC_API_KEY` e
-`VOYAGE_API_KEY` com valores reais. **O `.env` está no `.gitignore` e
-nunca deve ser versionado.**
+Edite o `.env` e preencha as variáveis **obrigatórias** com valores reais:
+
+| Variável | Papel |
+|---|---|
+| `MONGODB_URI` | String de conexão do cluster Atlas (Connect → Drivers) |
+| `MONGODB_DB` | Nome do banco que a aplicação usa (ex.: `graphrag`) |
+| `ANTHROPIC_API_KEY` | Chave da Anthropic (geração da resposta) |
+| `VOYAGE_API_KEY` | Chave da Voyage AI (embeddings / busca vetorial) |
+
+As demais variáveis (modelo do Claude, tamanho da resposta, pré-aquecimento do
+cache) são **opcionais** — têm padrão no código e estão documentadas inline no
+próprio `.env.example`. **O `.env` está no `.gitignore` e nunca deve ser
+versionado.**
 
 ### 2. Backend
 
@@ -212,14 +229,15 @@ npm run dev
 > "Ver a consulta" no frontend. O `/ask` já traz esses comandos em
 > `context.consultas`. Sem o parâmetro, a resposta é idêntica à de sempre.
 
-> **Desempenho.** A travessia `$graphLookup` recursa em `graph_edges` com índices
-> em `from`, `to` e `tipo`; a resolução de rótulos usa `$lookup` por `_id`. Há
-> índice em `graph_nodes.props.expires_at` (a tela de alertas filtra e ordena por
-> ele). Custo é agregação ponderada por caminho, então há pós-processamento
-> (`$group`) — tradeoff assumido, ver `SPEC.md` §4. O
-> `/graph/explore` lê no máximo `?limite=N` documentos por coleção (default
-> 200) e marca `truncado=true` se cortou — protege contra um inventário grande
-> sem alterar a demo (~60 nós).
+> **Desempenho.** A travessia `$graphLookup` recursa em `graph` casando
+> `arestas.to` → `_id` (índice multikey em `arestas.to`); a resolução de rótulos
+> **não usa `$lookup`** — cada nó devolvido já traz `label`/`props`. Há índice em
+> `graph.props.expires_at` (a tela de alertas filtra e ordena por ele). Custo é
+> agregação ponderada por caminho, mas o `spend` é local ao nó licença, então o
+> pós-processamento é só o `$group` — tradeoff assumido, ver `SPEC.md` §4. O
+> `/graph/explore` lê no máximo `?limite=N` documentos (default 200) e marca
+> `truncado=true` se cortou — protege contra um inventário grande sem alterar a
+> demo (~60 nós).
 
 Exemplo:
 ```bash
